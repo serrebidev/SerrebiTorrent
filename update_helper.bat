@@ -130,8 +130,7 @@ echo [SerrebiTorrent Update] Cleaning up staging folder...
 if exist "%STAGING_DIR%" (
     rmdir /s /q "%STAGING_DIR%" >nul 2>nul
 )
-
-rem Staging root cleanup - deferred to scheduled cleanup to avoid script termination issues
+call :cleanup_staging_root "%STAGING_DIR%"
 
 rem Handle backup cleanup based on retention policy
 set "KEEP_BACKUPS=%SERREBITORRENT_KEEP_BACKUPS%"
@@ -178,6 +177,35 @@ del "%VBS_LAUNCHER%" >nul 2>nul
 powershell -NoProfile -InputFormat None -Command "param([string]$log) try { Add-Type -AssemblyName PresentationFramework | Out-Null; $msg = 'SerrebiTorrent update failed.' + \"`n`n\" + 'Log file:' + \"`n\" + $log; [System.Windows.MessageBox]::Show($msg, 'SerrebiTorrent Update', 'OK', 'Error') | Out-Null } catch { }" "%LOG_FILE%" >nul 2>nul
 exit /b 1
 
+:cleanup_staging_root
+set "CLEANUP_STAGING_DIR=%~1"
+if "%CLEANUP_STAGING_DIR%"=="" exit /b 0
+for %%D in ("%CLEANUP_STAGING_DIR%\..") do set "STAGING_ROOT=%%~fD"
+if "%STAGING_ROOT%"=="" exit /b 0
+if not exist "%STAGING_ROOT%" exit /b 0
+
+set "SCRIPT_PATH=%~f0"
+powershell -NoProfile -InputFormat None -Command "$sp=[string]$env:SCRIPT_PATH; $root=[string]$env:STAGING_ROOT; if (-not $sp -or -not $root) { exit 1 }; $root=$root.TrimEnd('\'); if ($sp.ToLower().StartsWith(($root + '\').ToLower())) { exit 0 } else { exit 1 }" >nul 2>nul
+if errorlevel 1 (
+    rmdir /s /q "%STAGING_ROOT%" >nul 2>nul
+) else (
+    call :schedule_staging_root_cleanup "%STAGING_ROOT%"
+)
+exit /b 0
+
+:schedule_staging_root_cleanup
+set "STAGING_ROOT_TO_DELETE=%~1"
+if "%STAGING_ROOT_TO_DELETE%"=="" exit /b 0
+for /f %%T in ('powershell -NoProfile -InputFormat None -Command "(Get-Date).ToString(\"yyyyMMddHHmmss\")"') do set "STAGESTAMP=%%T"
+set "STAGING_CLEANUP_SCRIPT=%TEMP%\SerrebiTorrent_staging_cleanup_!STAGESTAMP!_!RANDOM!.bat"
+
+echo @echo off > "%STAGING_CLEANUP_SCRIPT%"
+echo timeout /t 2 /nobreak ^>nul 2^>nul >> "%STAGING_CLEANUP_SCRIPT%"
+echo rmdir /s /q "%STAGING_ROOT_TO_DELETE%" ^>nul 2^>nul >> "%STAGING_CLEANUP_SCRIPT%"
+echo del "%%~f0" ^>nul 2^>nul >> "%STAGING_CLEANUP_SCRIPT%"
+powershell -WindowStyle Hidden -NoProfile -Command "Start-Process -FilePath cmd.exe -ArgumentList '/c','\"%STAGING_CLEANUP_SCRIPT%\"' -WindowStyle Hidden" >nul 2>nul
+exit /b 0
+
 :schedule_backup_cleanup
 rem Schedule cleanup of old backups and staging folder
 set "CLEANUP_BACKUP=%~1"
@@ -202,7 +230,7 @@ echo ) >> "%CLEANUP_SCRIPT%"
 echo. >> "%CLEANUP_SCRIPT%"
 echo rem Enforce backup retention policy >> "%CLEANUP_SCRIPT%"
 echo for %%%%D in ("%CLEANUP_INSTALL%\.."^) do set "PARENT=%%%%~fD" >> "%CLEANUP_SCRIPT%"
-echo powershell -NoProfile -InputFormat None -Command "$parent=$env:PARENT; $keep=[int]$env:CLEANUP_KEEP; $pattern='*_backup_*'; $backups=@(Get-ChildItem -Path $parent -Directory ^| Where-Object { $_.Name -match $pattern } ^| Sort-Object Name -Descending); if ($backups.Count -gt $keep) { $backups ^| Select-Object -Skip $keep ^| ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue } }" >> "%CLEANUP_SCRIPT%"
+echo powershell -NoProfile -InputFormat None -Command "$parent=$env:PARENT; $keep=[int]$env:CLEANUP_KEEP; $pattern='*_backup_*'; $backups=@(Get-ChildItem -Path $parent -Directory ^| Where-Object { $_.Name -like $pattern } ^| Sort-Object Name -Descending); if ($backups.Count -gt $keep) { $backups ^| Select-Object -Skip $keep ^| ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue } }" >> "%CLEANUP_SCRIPT%"
 echo. >> "%CLEANUP_SCRIPT%"
 echo rem Clean up staging root folder >> "%CLEANUP_SCRIPT%"
 echo if defined CLEANUP_STAGING ( >> "%CLEANUP_SCRIPT%"
@@ -211,7 +239,7 @@ echo     if exist "%%STAGING_ROOT%%" rmdir /s /q "%%STAGING_ROOT%%" ^>nul 2^>nul
 echo ) >> "%CLEANUP_SCRIPT%"
 echo. >> "%CLEANUP_SCRIPT%"
 echo rem Self-destruct >> "%CLEANUP_SCRIPT%"
-echo del "%%%%~f0" ^>nul 2^>nul >> "%CLEANUP_SCRIPT%"
+echo del "%%~f0" ^>nul 2^>nul >> "%CLEANUP_SCRIPT%"
 
 rem Launch cleanup script detached and hidden
 powershell -WindowStyle Hidden -NoProfile -Command "Start-Process -FilePath cmd.exe -ArgumentList '/c','\"%CLEANUP_SCRIPT%\"' -WindowStyle Hidden" >nul 2>nul

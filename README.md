@@ -2,7 +2,7 @@
 
 SerrebiTorrent is a Windows desktop torrent manager designed for keyboard-first use and screen readers. It can manage torrents on this PC (local libtorrent) or control a remote client (qBittorrent, Transmission, rTorrent).
 
-**Latest:** v1.5.33 - Fixed CMD window flash during updates
+**Latest:** v1.5.41 - Moved releases and updater checks to serrebidev
 
 ## What you get
 - Connect to local libtorrent, rTorrent (SCGI/XML-RPC), qBittorrent, or Transmission from one interface.
@@ -13,7 +13,7 @@ SerrebiTorrent is a Windows desktop torrent manager designed for keyboard-first 
 - Keyboard workflow + tray support that plays nicely with NVDA and other screen readers.
 
 ## Download & run (portable)
-1. Download the latest ZIP from https://github.com/serrebi/SerrebiTorrent/releases
+1. Download the latest ZIP from https://github.com/serrebidev/SerrebiTorrent/releases
 2. Extract the entire `SerrebiTorrent` folder somewhere (example: `C:\Portable\SerrebiTorrent\`).
 3. Run `SerrebiTorrent.exe` (do not move the EXE out of its folder).
 
@@ -56,7 +56,7 @@ Versioning uses the latest `vMAJOR.MINOR.PATCH` tag as the base. If none exists,
 
 ## Build from source (developers)
 Commands:
-- `git clone https://github.com/serrebi/SerrebiTorrent`
+- `git clone https://github.com/serrebidev/SerrebiTorrent`
 - `python -m pip install -r requirements.txt`
 - `build_exe.bat build`
 

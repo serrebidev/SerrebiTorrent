@@ -6,8 +6,9 @@ set "EXE_NAME=SerrebiTorrent.exe"
 set "VERSION_FILE=app_version.py"
 set "MANIFEST_NAME=SerrebiTorrent-update.json"
 set "DEFAULT_SIGNTOOL=C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
-set "GITHUB_OWNER=serrebi"
+set "GITHUB_OWNER=serrebidev"
 set "GITHUB_REPO=SerrebiTorrent"
+set "PYTHON_CMD=py -3.14"
 
 if "%SIGNTOOL_PATH%"=="" (
     set "SIGNTOOL_PATH=%DEFAULT_SIGNTOOL%"
@@ -29,10 +30,13 @@ echo ========================================
 set "ROOT=%~dp0"
 pushd "%ROOT%"
 
+%PYTHON_CMD% --version >nul 2>&1 || (echo Python 3.14 not found.& goto :error)
+
 if /I "%MODE%"=="release" (
     where git >nul 2>&1 || (echo Git not found in PATH.& goto :error)
     where gh >nul 2>&1 || (echo GitHub CLI ^(gh^) not found in PATH.& goto :error)
     call :detect_github
+    call :ensure_tracked_tree_clean || goto :error
     echo Fetching tags...
     git fetch --tags
     if errorlevel 1 (
@@ -87,7 +91,7 @@ if exist dist (
 )
 
 echo Running PyInstaller...
-pyinstaller SerrebiTorrent.spec --noconfirm
+%PYTHON_CMD% -m PyInstaller SerrebiTorrent.spec --noconfirm
 if errorlevel 1 goto :error
 
 echo Copying additional files...
@@ -145,7 +149,7 @@ if "%CURRENT_VERSION%"=="" (
 exit /b 0
 
 :update_version_file
-python tools\update_version.py --path "%VERSION_FILE%" --version "%NEXT_VERSION%"
+%PYTHON_CMD% tools\update_version.py --path "%VERSION_FILE%" --version "%NEXT_VERSION%"
 if errorlevel 1 (
     echo Failed to update %VERSION_FILE%.
     exit /b 1
@@ -169,7 +173,7 @@ set "SIGNING_THUMBPRINT_ARG="
 if defined SIGN_CERT_THUMBPRINT (
     set "SIGNING_THUMBPRINT_ARG=--signing-thumbprint \"%SIGN_CERT_THUMBPRINT%\""
 )
-python tools\release_manifest.py --version "%NEXT_VERSION%" --asset-name "%ZIP_NAME%" --download-url "%DOWNLOAD_URL%" --zip-path "%ZIP_PATH%" --notes-path "%RELEASE_NOTES%" --signtool-path "%SIGNTOOL_PATH%" --exe-path "%EXE_PATH%" %SIGNING_THUMBPRINT_ARG% --output "%MANIFEST_PATH%"
+%PYTHON_CMD% tools\release_manifest.py --version "%NEXT_VERSION%" --asset-name "%ZIP_NAME%" --download-url "%DOWNLOAD_URL%" --zip-path "%ZIP_PATH%" --notes-path "%RELEASE_NOTES%" --signtool-path "%SIGNTOOL_PATH%" --exe-path "%EXE_PATH%" %SIGNING_THUMBPRINT_ARG% --output "%MANIFEST_PATH%"
 if errorlevel 1 (
     echo Failed to create update manifest.
     exit /b 1
@@ -203,6 +207,19 @@ if errorlevel 1 (
 git push origin "v%NEXT_VERSION%"
 if errorlevel 1 (
     echo Git tag push failed.
+    exit /b 1
+)
+exit /b 0
+
+:ensure_tracked_tree_clean
+git diff --quiet
+if errorlevel 1 (
+    echo Working tree has uncommitted tracked changes. Commit or stash them before release.
+    exit /b 1
+)
+git diff --cached --quiet
+if errorlevel 1 (
+    echo Index has staged changes. Commit or unstage them before release.
     exit /b 1
 )
 exit /b 0

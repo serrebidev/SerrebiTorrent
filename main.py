@@ -2599,9 +2599,9 @@ class MainFrame(wx.Frame):
         info.SetName("SerrebiTorrent")
         info.SetVersion(APP_VERSION)
         info.SetDescription("A Windows desktop torrent manager designed for keyboard-first use and screen readers.")
-        info.SetCopyright("Copyright © 2025-2026 serrebi and contributors")
-        info.SetWebSite("https://github.com/serrebi/SerrebiTorrent")
-        info.AddDeveloper("serrebi")
+        info.SetCopyright("Copyright © 2025-2026 serrebidev and contributors")
+        info.SetWebSite("https://github.com/serrebidev/SerrebiTorrent")
+        info.AddDeveloper("serrebidev")
         wx.adv.AboutBox(info)
 
     def check_for_updates(self, manual=False):

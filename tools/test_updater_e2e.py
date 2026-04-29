@@ -162,6 +162,11 @@ def test_update_flow(test_root: Path, keep_backups: int = 1) -> None:
     time.sleep(5)
     
     print(f"\n[8/8] Checking delayed cleanup...")
+    if staging_root.exists():
+        print(f"      ❌ FAIL: Staging root still exists after cleanup wait: {staging_root}")
+        return False
+    print(f"      ✓ Staging root cleaned up")
+
     backup_dirs = list(test_root.glob("SerrebiTorrent_backup_*"))
     print(f"      Found {len(backup_dirs)} backup folder(s)")
     
@@ -268,6 +273,7 @@ def main():
     """Run all tests."""
     print("SerrebiTorrent Updater End-to-End Test")
     print("=" * 60)
+    failures = 0
     
     script_root = Path(__file__).parent.parent
     print(f"Script root: {script_root}")
@@ -280,16 +286,20 @@ def main():
         
         # Test 1: Update with keep_backups=1 (default)
         try:
-            test_update_flow(test_root / "test1", keep_backups=1)
+            if not test_update_flow(test_root / "test1", keep_backups=1):
+                raise AssertionError("Update flow with keep_backups=1 failed")
         except Exception as e:
+            failures += 1
             print(f"\n❌ Test 1 failed: {e}")
             import traceback
             traceback.print_exc()
         
         # Test 2: Update with keep_backups=0 (immediate deletion)
         try:
-            test_update_flow(test_root / "test2", keep_backups=0)
+            if not test_update_flow(test_root / "test2", keep_backups=0):
+                raise AssertionError("Update flow with keep_backups=0 failed")
         except Exception as e:
+            failures += 1
             print(f"\n❌ Test 2 failed: {e}")
             import traceback
             traceback.print_exc()
@@ -298,6 +308,7 @@ def main():
         try:
             test_multiple_backups_retention()
         except Exception as e:
+            failures += 1
             print(f"\n❌ Test 3 failed: {e}")
             import traceback
             traceback.print_exc()
@@ -306,6 +317,7 @@ def main():
         try:
             test_rollback_scenario()
         except Exception as e:
+            failures += 1
             print(f"\n❌ Test 4 failed: {e}")
             import traceback
             traceback.print_exc()
@@ -313,6 +325,8 @@ def main():
     print(f"\n{'='*60}")
     print("All tests completed!")
     print(f"{'='*60}\n")
+    if failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ import requests
 
 from app_version import APP_VERSION
 
-GITHUB_OWNER = "serrebi"
+GITHUB_OWNER = "serrebidev"
 GITHUB_REPO = "SerrebiTorrent"
 UPDATE_MANIFEST_ASSET = "SerrebiTorrent-update.json"
 APP_EXE_NAME = "SerrebiTorrent.exe"

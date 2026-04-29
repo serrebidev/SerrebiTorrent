@@ -49,7 +49,12 @@
 - Version bumps in `build_exe.bat` now call `tools/update_version.py` to update `app_version.py` safely (avoids PowerShell quoting pitfalls).
 - Update process runs completely hidden (no CMD windows) via `STARTUPINFO` with `SW_HIDE` flag.
 - Backups are cleaned up automatically: default keeps 1 backup with 5-minute grace period; configure via `SERREBITORRENT_KEEP_BACKUPS` env var.
-- Staging folders (`<AppName>_Update_<timestamp>`) are deleted immediately after successful update.
+- Staging folders (`<AppName>_Update_<timestamp>`) are deleted immediately after successful update, or by a short detached cleanup when the helper is running from the staging folder itself.
 - Test updater end-to-end with `python tools\test_updater_e2e.py` or manually with `python tools\test_updater_manual.py`.
+
+## Build hygiene
+- After building (`pyinstaller SerrebiTorrent.spec`), check the output for any warnings, errors, or bugs.
+- Always fix any warnings, bugs, or errors encountered during the build if you can. Do not leave known issues unresolved.
+- If a fix is not possible (e.g., upstream bug, missing context), document the issue here under "Known build issues" so it is tracked.
 
 Keep edits lean, comment only when code is not self-explanatory, and leave user-facing docs in README.md. Everything technical goes here.

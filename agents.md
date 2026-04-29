@@ -57,4 +57,7 @@
 - Always fix any warnings, bugs, or errors encountered during the build if you can. Do not leave known issues unresolved.
 - If a fix is not possible (e.g., upstream bug, missing context), document the issue here under "Known build issues" so it is tracked.
 
+## Known build issues
+- PyInstaller 6.x prints an elevated-shell deprecation warning when the build is launched from an administrator terminal. The build succeeds; run the release command from a non-admin terminal to avoid the warning.
+
 Keep edits lean, comment only when code is not self-explanatory, and leave user-facing docs in README.md. Everything technical goes here.

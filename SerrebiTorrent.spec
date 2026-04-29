@@ -34,8 +34,14 @@ hiddenimports += collect_submodules('bs4')
 hiddenimports += collect_submodules('yaml')
 hiddenimports += collect_submodules('werkzeug')
 hiddenimports += collect_submodules('jinja2')
-hiddenimports += collect_submodules('urllib3')
-hiddenimports += collect_submodules('chardet')
+hiddenimports += collect_submodules(
+    'urllib3',
+    filter=lambda name: not (
+        name.startswith('urllib3.contrib.emscripten')
+        or name.startswith('urllib3.http2')
+    ),
+)
+hiddenimports += collect_submodules('chardet', filter=lambda name: not name.startswith('chardet.pipeline'))
 hiddenimports += collect_submodules('idna')
 hiddenimports += collect_submodules('certifi')
 
@@ -67,10 +73,15 @@ a = Analysis(
     ],
     datas=[(os.path.abspath('web_static'), 'web_static'), (os.path.abspath('update_helper.bat'), '.')] + collect_data_files('flask'),
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=[os.path.abspath('hooks')],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'urllib3.contrib.emscripten',
+        'urllib3.contrib.emscripten.fetch',
+        'urllib3.http2',
+        'urllib3.http2.connection',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

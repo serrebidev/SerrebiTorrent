@@ -31,7 +31,7 @@ $base = if ($latest) { [version]$latest.TrimStart("v") } else { $minVersion }
 $range = if ($latest) { "$latest..HEAD" } else { "HEAD" }
 
 $log = git log $range --pretty=format:%s`n%b`n--END--
-$commits = $log -split "--END--`n" | Where-Object { $_.Trim() -ne "" }
+$commits = $log -split "(?m)^--END--\s*$" | Where-Object { $_.Trim() -ne "" }
 
 $breaking = $false
 $feature = $false

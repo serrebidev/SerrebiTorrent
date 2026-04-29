@@ -38,7 +38,7 @@ hiddenimports += collect_submodules(
     'urllib3',
     filter=lambda name: not (
         name.startswith('urllib3.contrib.emscripten')
-        or name.startswith('urllib3.http2')
+        or name.startswith('urllib3.http2.connection')
     ),
 )
 hiddenimports += collect_submodules('chardet', filter=lambda name: not name.startswith('chardet.pipeline'))
@@ -79,7 +79,6 @@ a = Analysis(
     excludes=[
         'urllib3.contrib.emscripten',
         'urllib3.contrib.emscripten.fetch',
-        'urllib3.http2',
         'urllib3.http2.connection',
     ],
     win_no_prefer_redirects=False,

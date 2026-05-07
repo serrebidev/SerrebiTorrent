@@ -2,7 +2,7 @@
 
 SerrebiTorrent is a Windows desktop torrent manager designed for keyboard-first use and screen readers. It can manage torrents on this PC (local libtorrent) or control a remote client (qBittorrent, Transmission, rTorrent).
 
-**Latest:** v1.5.43 - Refreshed bundled libtorrent build
+**Latest:** v1.5.45
 
 ## What you get
 - Connect to local libtorrent, rTorrent (SCGI/XML-RPC), qBittorrent, or Transmission from one interface.
@@ -20,17 +20,17 @@ SerrebiTorrent is a Windows desktop torrent manager designed for keyboard-first 
 Portable data (profiles, preferences, resume data, logs) lives next to the app in `SerrebiTorrent_Data\`.
 
 ## First-time setup
-- Open Connection Manager: `Ctrl+Shift+C` (or tray icon → Switch Profile → Connection Manager...)
+- Open Connection Manager: `Ctrl+Shift+C` (or tray icon -> Switch Profile -> Connection Manager...)
 - Add a profile and connect:
   - **Local**: manages torrents via libtorrent on this PC (default profile on first run).
   - **Remote**: point at qBittorrent / Transmission / rTorrent and enter credentials if needed.
 
 ## Settings
-- Local session + app settings: Tools → Local Session Settings… (Ctrl+,) (or tray icon → Settings → Local Session Settings…)
-- Remote client settings (enabled only when connected): Tools → qBittorrent/Transmission/rTorrent Remote Settings… (or tray icon → Settings → …)
+- Local session + app settings: Tools -> Local Session Settings... (Ctrl+,) (or tray icon -> Settings -> Local Session Settings...)
+- Remote client settings (enabled only when connected): Tools -> qBittorrent/Transmission/rTorrent Remote Settings... (or tray icon -> Settings -> ...)
 
 ## Auto-updater (Windows)
-The app checks GitHub Releases for updates. You can enable/disable the startup check in Local Session Settings, or run Tools → Check for Updates.
+The app checks GitHub Releases for updates. You can enable/disable the startup check in Local Session Settings, or run Tools -> Check for Updates.
 
 Update flow:
 - Downloads the release ZIP from GitHub using the update manifest asset (`SerrebiTorrent-update.json`).

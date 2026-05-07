@@ -109,3 +109,6 @@ SerrebiTorrent includes automatic update functionality:
   - No CMD/console windows appear during the update
   - After 5 minutes, backup folders are automatically cleaned up (or immediately if `SERREBITORRENT_KEEP_BACKUPS=0`)
   - The status bar reports update status or errors clearly
+
+##Submit bugs in issues, or join my Telegram group!
+(https://t.me/SerrebiProjects)

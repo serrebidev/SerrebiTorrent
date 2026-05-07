@@ -228,9 +228,26 @@ exit /b 0
 echo Creating GitHub release v%NEXT_VERSION%...
 gh release create "v%NEXT_VERSION%" "%ZIP_PATH%" "%MANIFEST_PATH%" ^
     --title "V%NEXT_VERSION%" ^
-    --notes-file "%RELEASE_NOTES%"
+    --notes-file "%RELEASE_NOTES%" ^
+    --latest
 if errorlevel 1 (
     echo GitHub release creation failed.
+    exit /b 1
+)
+echo Ensuring v%NEXT_VERSION% is published and marked as Latest...
+gh release edit "v%NEXT_VERSION%" --draft=false --latest
+if errorlevel 1 (
+    echo Failed to publish v%NEXT_VERSION% as Latest.
+    exit /b 1
+)
+call :delete_draft_releases || exit /b 1
+exit /b 0
+
+:delete_draft_releases
+echo Checking for draft releases...
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $repo='%GITHUB_OWNER%/%GITHUB_REPO%'; $drafts = gh release list --repo $repo --limit 100 --json tagName,isDraft ^| ConvertFrom-Json ^| Where-Object { $_.isDraft }; foreach ($draft in $drafts) { Write-Host ('Deleting draft release ' + $draft.tagName + '...'); gh release delete $draft.tagName --repo $repo --yes }"
+if errorlevel 1 (
+    echo Failed to remove draft releases.
     exit /b 1
 )
 exit /b 0

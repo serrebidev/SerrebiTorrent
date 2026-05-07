@@ -1,13 +1,13 @@
-# SerrebiTorrent – agent notes
+# SerrebiTorrent - agent notes
 
 ## Repo facts
-- Location: Assume Windows 11, 64‑bit.
+- Location: Assume Windows 11, 64-bit.
 - Entry point: `main.py`. GUI built with wxPython.
 - Background libtorrent session lives in `session_manager.py`. Do not duplicate sessions.
 
 
 ## Runtime requirements
-- Python 3.14 (64‑bit).
+- Python 3.14 (64-bit).
 - Core packages: see `requirements.txt`. Libs already installed in the user site-packages.
 - Libtorrent DLL resolution happens in `libtorrent_env.py`. Always call `prepare_libtorrent_dlls()` before importing `libtorrent`.
 - OpenSSL 3 DLLs (`libcrypto-3-x64.dll`, `libssl-3-x64.dll`) sit in the repo root and are bundled into the EXE (required for libtorrent HTTPS). Legacy 1.1 DLLs remain for compatibility.
@@ -56,6 +56,7 @@
 - After building (`pyinstaller SerrebiTorrent.spec`), check the output for any warnings, errors, or bugs.
 - Always fix any warnings, bugs, or errors encountered during the build if you can. Do not leave known issues unresolved.
 - If a fix is not possible (e.g., upstream bug, missing context), document the issue here under "Known build issues" so it is tracked.
+- Release builds must publish the GitHub release as non-draft/latest and remove any remaining draft releases. Never leave draft releases behind.
 
 ## Known build issues
 - PyInstaller 6.x prints an elevated-shell deprecation warning when the build is launched from an administrator terminal. The build succeeds; run the release command from a non-admin terminal to avoid the warning.

@@ -192,6 +192,13 @@ def clean_status_message(msg):
     return m
 
 
+def seed_save_path_for_source(source_path):
+    source_path = os.path.abspath(source_path)
+    base = source_path.rstrip("\\/")
+    parent = os.path.dirname(base)
+    return parent or source_path
+
+
 try:
     import libtorrent as lt
 except ImportError:
@@ -3709,7 +3716,7 @@ class MainFrame(wx.Frame):
             # Optional add to client
             if opts.get("add_to_client") and self.client:
                 try:
-                    # Add torrent file content; prompt for save path via existing dialog
+                    seed_save_path = seed_save_path_for_source(source_path)
                     with open(output_path, "rb") as f:
                         content = f.read()
                     self._prepare_auto_start()
@@ -3721,7 +3728,7 @@ class MainFrame(wx.Frame):
                         client,
                         generation,
                         content,
-                        None,
+                        seed_save_path,
                         None,
                         "Created torrent added",
                     )

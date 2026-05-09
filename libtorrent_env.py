@@ -45,7 +45,7 @@ def prepare_libtorrent_dlls() -> None:
     libtorrent_dir = None
     try:
         spec = importlib.util.find_spec("libtorrent")
-    except ImportError:
+    except (ImportError, ValueError):
         spec = None
 
     if spec and spec.origin:

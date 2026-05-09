@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote
 from typing import List, Optional, Tuple
 
 import wx
@@ -145,7 +146,7 @@ def create_torrent_bytes(
             pass
 
     # Hash pieces
-    base_path = source_path if os.path.isdir(source_path) else os.path.dirname(source_path)
+    base_path = os.path.dirname(source_path.rstrip("\\/")) or os.path.dirname(source_path) or source_path
     lt.set_piece_hashes(ct, base_path)
 
     e = ct.generate()
@@ -172,6 +173,11 @@ def create_torrent_bytes(
         info_hash = ""
 
     magnet = f"magnet:?xt=urn:btih:{info_hash}" if info_hash else ""
+    if magnet:
+        for tr in trackers or []:
+            tr = (tr or "").strip()
+            if tr:
+                magnet += f"&tr={quote(tr, safe='')}"
     return torrent_bytes, magnet, info_hash
 
 
@@ -211,7 +217,7 @@ class CreateTorrentDialog(wx.Dialog):
         opt_box = wx.StaticBoxSizer(wx.StaticBox(self, label="Torrent Options"), wx.VERTICAL)
 
         self.private_chk = wx.CheckBox(self, label="Private torrent (disables DHT/PEX/LSD in most clients)")
-        self.private_chk.SetValue(True)
+        self.private_chk.SetValue(False)
         opt_box.Add(self.private_chk, 0, wx.ALL, 6)
 
         piece_row = wx.BoxSizer(wx.HORIZONTAL)

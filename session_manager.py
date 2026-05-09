@@ -17,6 +17,33 @@ except ImportError:
 from app_paths import get_state_dir
 from config_manager import ConfigManager
 
+
+def _unlimited_if_negative(value, default=0):
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return default
+    return 0 if value < 0 else value
+
+
+def _unlimited_slots(value, default=-1):
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return default
+    return -1 if value <= 0 else value
+
+
+def _listen_port(value, default=6881):
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return default
+    if 1 <= port <= 65535:
+        return port
+    return default
+
+
 class SessionManager:
     _instance = None
     
@@ -113,6 +140,8 @@ class SessionManager:
             if prefs.get('proxy_user'):
                 lt_proxy_type = lt.proxy_type_t.http_pw
 
+        port = _listen_port(prefs.get('listen_port', 6881))
+
         settings = {
             'user_agent': 'qBittorrent/4.6.3',
             'peer_fingerprint': b'-qB4630-',
@@ -120,6 +149,8 @@ class SessionManager:
             'enable_lsd': prefs.get('enable_lsd', True),
             'enable_upnp': prefs.get('enable_upnp', True),
             'enable_natpmp': prefs.get('enable_natpmp', True),
+            'listen_interfaces': f'0.0.0.0:{port},[::]:{port}',
+            'max_retry_port_bind': 10,
             'alert_mask': lt.alert.category_t.status_notification | lt.alert.category_t.storage_notification | lt.alert.category_t.error_notification,
             
             # Limits
@@ -127,9 +158,9 @@ class SessionManager:
             'active_downloads': -1, # Unlimited active
             'active_seeds': -1,
             'active_limit': -1, # Total active torrents
-            # 'upload_slots_limit': prefs.get('max_uploads', -1), # Removed as it causes error in newer libtorrent
-            'download_rate_limit': prefs.get('dl_limit', 0),
-            'upload_rate_limit': prefs.get('ul_limit', 0),
+            'unchoke_slots_limit': _unlimited_slots(prefs.get('max_uploads', -1)),
+            'download_rate_limit': _unlimited_if_negative(prefs.get('dl_limit', 0)),
+            'upload_rate_limit': _unlimited_if_negative(prefs.get('ul_limit', 0)),
 
             # Proxy
             'proxy_type': lt_proxy_type,
@@ -138,10 +169,6 @@ class SessionManager:
             'proxy_username': prefs.get('proxy_user', ''),
             'proxy_password': prefs.get('proxy_password', '')
         }
-        
-        # Listen Port
-        port = prefs.get('listen_port', 6881)
-        self.ses.listen_on(port, port + 10)
         
         self.ses.apply_settings(settings)
 

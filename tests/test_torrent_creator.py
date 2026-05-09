@@ -1,5 +1,6 @@
 import os
 import tempfile
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -23,6 +24,49 @@ def test_create_torrent_bytes_roundtrip():
         assert info_hash
         assert magnet.startswith("magnet:?xt=urn:btih:")
         assert torrent_parsing.safe_torrent_info_hash(torrent_bytes) == info_hash
+
+
+@pytest.mark.skipif(torrent_creator.lt is None, reason="libtorrent not installed")
+def test_create_torrent_bytes_folder_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        src_dir = os.path.join(tmp_dir, "payload")
+        os.mkdir(src_dir)
+        with open(os.path.join(src_dir, "file.txt"), "wb") as f:
+            f.write(b"hello world")
+
+        torrent_bytes, magnet, info_hash = torrent_creator.create_torrent_bytes(
+            src_dir,
+            trackers=[],
+        )
+
+        info = torrent_creator.lt.torrent_info(torrent_bytes)
+        assert torrent_bytes
+        assert info_hash
+        assert magnet.startswith("magnet:?xt=urn:btih:")
+        assert info.name() == "payload"
+        assert info.files().file_path(0).replace("\\", "/") == "payload/file.txt"
+
+
+@pytest.mark.skipif(torrent_creator.lt is None, reason="libtorrent not installed")
+def test_create_torrent_magnet_includes_trackers():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        src = os.path.join(tmp_dir, "file.txt")
+        with open(src, "wb") as f:
+            f.write(b"hello world")
+
+        _, magnet, _ = torrent_creator.create_torrent_bytes(
+            src,
+            trackers=[
+                "udp://tracker.example:1337/announce",
+                "https://tracker.example/announce",
+            ],
+        )
+
+        query = parse_qs(urlparse(magnet).query)
+        assert query["tr"] == [
+            "udp://tracker.example:1337/announce",
+            "https://tracker.example/announce",
+        ]
 
 
 @pytest.mark.skipif(torrent_creator.lt is None, reason="libtorrent not installed")

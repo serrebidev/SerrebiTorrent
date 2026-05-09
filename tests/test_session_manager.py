@@ -34,6 +34,8 @@ def mock_libtorrent_environment():
 
     mock_lt.resume_data_flags_t = MagicMock()
     mock_lt.resume_data_flags_t.flush_disk_cache = 1
+    mock_lt.session.return_value.wait_for_alert.return_value = False
+    mock_lt.session.return_value.pop_alerts.return_value = []
     
     # Patch
     sys.modules['libtorrent'] = mock_lt
@@ -71,7 +73,10 @@ def session_manager(mock_libtorrent_environment):
                 with patch('os.listdir', return_value=[]):
                     sm = SessionManager.get_instance()
                     sm.ses.reset_mock()
-                    return sm
+                    yield sm
+                    sm.running = False
+                    sm.alert_thread.join(timeout=1)
+                    SessionManager._instance = None
 
 def test_singleton(session_manager):
     from session_manager import SessionManager
@@ -82,7 +87,8 @@ def test_apply_preferences(session_manager):
     prefs = {
         'dl_limit': 1000,
         'ul_limit': 2000,
-        'max_connections': 50
+        'max_connections': 50,
+        'listen_port': 7001,
     }
     session_manager.apply_preferences(prefs)
     
@@ -93,6 +99,30 @@ def test_apply_preferences(session_manager):
     assert call_args['download_rate_limit'] == 1000
     assert call_args['upload_rate_limit'] == 2000
     assert call_args['connections_limit'] == 50
+    assert call_args['listen_interfaces'] == '0.0.0.0:7001,[::]:7001'
+
+
+def test_apply_preferences_maps_upload_slots_and_unlimited_limits(session_manager):
+    prefs = {
+        'dl_limit': -1,
+        'ul_limit': -1,
+        'max_uploads': 12,
+    }
+    session_manager.apply_preferences(prefs)
+
+    call_args = session_manager.ses.apply_settings.call_args[0][0]
+
+    assert call_args['download_rate_limit'] == 0
+    assert call_args['upload_rate_limit'] == 0
+    assert call_args['unchoke_slots_limit'] == 12
+
+
+def test_apply_preferences_treats_zero_upload_slots_as_unlimited(session_manager):
+    session_manager.apply_preferences({'max_uploads': 0})
+
+    call_args = session_manager.ses.apply_settings.call_args[0][0]
+
+    assert call_args['unchoke_slots_limit'] == -1
 
 def test_add_magnet(session_manager, mock_libtorrent_environment):
     magnet = "magnet:?xt=urn:btih:abcdef"

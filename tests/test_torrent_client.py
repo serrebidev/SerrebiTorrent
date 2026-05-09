@@ -95,6 +95,8 @@ def mock_lt():
     
     mock.resume_data_flags_t = MagicMock()
     mock.resume_data_flags_t.flush_disk_cache = 1
+    mock.session.return_value.wait_for_alert.return_value = False
+    mock.session.return_value.pop_alerts.return_value = []
     
     mock.remove_flags_t = MagicMock()
     mock.remove_flags_t.delete_files = 1
@@ -147,6 +149,8 @@ def session_manager_instance(mock_session_env):
                     sm = SessionManager.get_instance()
                     sm.ses.reset_mock()
                     yield sm
+                    sm.running = False
+                    sm.alert_thread.join(timeout=1)
     
     SessionManager._instance = None
 
@@ -260,7 +264,8 @@ class TestSessionManagerState:
         session_manager_instance.ses.get_torrents.return_value = [mock_handle1, mock_handle2]
         session_manager_instance.pending_saves = set()
         
-        session_manager_instance.save_state()
+        with patch.object(session_manager_instance, '_handle_hash_key', return_value=""):
+            session_manager_instance.save_state()
         
         mock_handle1.save_resume_data.assert_called_once()
         mock_handle2.save_resume_data.assert_called_once()
@@ -514,4 +519,6 @@ class TestConcurrentOperations:
         
         assert len(errors) == 0, f"Thread safety errors: {errors}"
         
+        sm.running = False
+        sm.alert_thread.join(timeout=1)
         SessionManager._instance = None

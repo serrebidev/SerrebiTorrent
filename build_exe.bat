@@ -245,7 +245,7 @@ exit /b 0
 
 :delete_draft_releases
 echo Checking for draft releases...
-powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $repo='%GITHUB_OWNER%/%GITHUB_REPO%'; $drafts = gh release list --repo $repo --limit 100 --json tagName,isDraft ^| ConvertFrom-Json ^| Where-Object { $_.isDraft }; foreach ($draft in $drafts) { Write-Host ('Deleting draft release ' + $draft.tagName + '...'); gh release delete $draft.tagName --repo $repo --yes }"
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $repo='%GITHUB_OWNER%/%GITHUB_REPO%'; $releases = @(gh release list --repo $repo --limit 100 --json tagName,isDraft | ConvertFrom-Json); foreach ($release in $releases) { if ($release.isDraft -eq $true) { Write-Host ('Deleting draft release ' + $release.tagName + '...'); gh release delete $release.tagName --repo $repo --yes } }"
 if errorlevel 1 (
     echo Failed to remove draft releases.
     exit /b 1

@@ -25,7 +25,7 @@ from rss_manager import RSSManager
 import web_server
 import updater
 from torrent_creator import CreateTorrentDialog, create_torrent_bytes
-from torrent_parsing import parse_magnet_infohash, safe_torrent_info_hash
+from torrent_parsing import build_magnet_from_hashes, parse_magnet_infohash, safe_torrent_info_hash
 
 
 # Constants for List Columns
@@ -41,6 +41,24 @@ COL_AVAILABILITY = 7
 # Rows in the torrent list carry an extra hidden value at the end (info hash).
 ROW_HASH_INDEX = -1
 APP_NAME = "SerrebiTorrent"
+
+
+def torrent_magnet_link(torrent):
+    if not isinstance(torrent, dict):
+        return ""
+    if torrent.get("magnet"):
+        return str(torrent["magnet"])
+
+    hashes = torrent.get("hashes") if isinstance(torrent.get("hashes"), dict) else {}
+    v1_hash = torrent.get("hash_v1") or hashes.get("v1")
+    v2_hash = torrent.get("hash_v2") or hashes.get("v2")
+    if not v1_hash and not v2_hash:
+        h = str(torrent.get("hash") or "").strip()
+        if len(h) in (64, 68) or h.lower().startswith("urn:btmh:"):
+            v2_hash = h
+        else:
+            v1_hash = h
+    return build_magnet_from_hashes(v1_hash, v2_hash, torrent.get("name"))
 
 
 def get_app_icon():
@@ -3581,15 +3599,12 @@ class MainFrame(wx.Frame):
 
     def on_copy_magnet(self, event):
         objs, missing = self._get_selected_torrent_objects()
-        hashes = [t.get("hash") for t in objs if t.get("hash")] + missing
-        hashes = [h for h in hashes if h]
-        if not hashes:
+        magnets = [torrent_magnet_link(t) for t in objs]
+        magnets.extend(torrent_magnet_link({"hash": h}) for h in missing if h)
+        magnets = [m for m in magnets if m]
+        if not magnets:
             self.statusbar.SetStatusText("No torrents selected.", 0)
             return
-
-        magnets = []
-        for h in hashes:
-            magnets.append(f"magnet:?xt=urn:btih:{h}")
 
         text = "\n".join(magnets)
         if self._set_clipboard_text(text):

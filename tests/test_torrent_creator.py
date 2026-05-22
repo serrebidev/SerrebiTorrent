@@ -22,7 +22,9 @@ def test_create_torrent_bytes_roundtrip():
 
         assert torrent_bytes
         assert info_hash
-        assert magnet.startswith("magnet:?xt=urn:btih:")
+        query = parse_qs(urlparse(magnet).query)
+        assert f"urn:btih:{info_hash}" in query["xt"]
+        assert any(xt.startswith("urn:btmh:1220") for xt in query["xt"])
         assert torrent_parsing.safe_torrent_info_hash(torrent_bytes) == info_hash
 
 
@@ -42,7 +44,8 @@ def test_create_torrent_bytes_folder_roundtrip():
         info = torrent_creator.lt.torrent_info(torrent_bytes)
         assert torrent_bytes
         assert info_hash
-        assert magnet.startswith("magnet:?xt=urn:btih:")
+        query = parse_qs(urlparse(magnet).query)
+        assert f"urn:btih:{info_hash}" in query["xt"]
         assert info.name() == "payload"
         assert info.files().file_path(0).replace("\\", "/") == "payload/file.txt"
 

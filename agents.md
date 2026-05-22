@@ -44,6 +44,7 @@
 - If you must run tests, there are no automated suites. Launch `python main.py` and exercise the UI manually.
 
 ## Update notes
+- Before each SerrebiTorrent release, verify the latest stable qBittorrent release from the official qBittorrent download/release pages and update `QBITTORRENT_REPORTED_VERSION` / `QBITTORRENT_PEER_FINGERPRINT` in `session_manager.py` if it changed.
 - The updater accepts a `signing_thumbprint` value in the release manifest so self-signed Authenticode signatures can be trusted when Windows reports UnknownError.
 - Release manifests are generated via `tools/release_manifest.py`, which parses `signtool verify` output to capture the signing thumbprint (override with `SIGN_CERT_THUMBPRINT`).
 - Version bumps in `build_exe.bat` now call `tools/update_version.py` to update `app_version.py` safely (avoids PowerShell quoting pitfalls).

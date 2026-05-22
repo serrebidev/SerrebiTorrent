@@ -16,6 +16,11 @@ except ImportError:
 
 from app_paths import get_state_dir
 from config_manager import ConfigManager
+from torrent_parsing import normalize_info_hash
+
+QBITTORRENT_REPORTED_VERSION = "5.2.0"
+QBITTORRENT_USER_AGENT = f"qBittorrent/{QBITTORRENT_REPORTED_VERSION}"
+QBITTORRENT_PEER_FINGERPRINT = b"-qB5200-"
 
 
 def _unlimited_if_negative(value, default=0):
@@ -117,9 +122,19 @@ class SessionManager:
             text = str(value).strip()
         except Exception:
             return ""
+        if text.startswith("<") and text.endswith(">"):
+            return ""
+        normalized = normalize_info_hash(text)
+        if normalized:
+            return normalized
         if text and all(c in "0123456789abcdefABCDEF" for c in text) and len(text) in (40, 64):
             return text.lower()
         return text
+
+    def _append_hash_key(self, keys, value):
+        key = self._hash_object_key(value)
+        if key and key not in keys:
+            keys.append(key)
 
     def _info_hash_keys(self, info_hashes):
         if info_hashes is None:
@@ -127,25 +142,55 @@ class SessionManager:
         keys = []
         try:
             if hasattr(info_hashes, "has_v1") and info_hashes.has_v1():
-                keys.append(self._hash_object_key(info_hashes.v1))
+                self._append_hash_key(keys, info_hashes.v1)
             if hasattr(info_hashes, "has_v2") and info_hashes.has_v2():
-                keys.append(self._hash_object_key(info_hashes.v2))
+                self._append_hash_key(keys, info_hashes.v2)
         except Exception:
             pass
-        keys.append(self._hash_object_key(info_hashes))
-        out = []
-        for key in keys:
-            if key and key not in out:
-                out.append(key)
-        return out
+        self._append_hash_key(keys, info_hashes)
+        return keys
 
     def _info_hash_key(self, info_hashes):
         keys = self._info_hash_keys(info_hashes)
         return keys[0] if keys else ""
 
+    def _info_hash_dict(self, info_hashes):
+        hashes = {}
+        try:
+            if hasattr(info_hashes, "has_v1") and info_hashes.has_v1():
+                v1 = self._hash_object_key(info_hashes.v1)
+                if v1:
+                    hashes["v1"] = v1
+            if hasattr(info_hashes, "has_v2") and info_hashes.has_v2():
+                v2 = self._hash_object_key(info_hashes.v2)
+                if v2:
+                    hashes["v2"] = v2
+        except Exception:
+            pass
+        for key in self._info_hash_keys(info_hashes):
+            if len(key) == 40 and "v1" not in hashes:
+                hashes["v1"] = key
+            elif len(key) == 64 and "v2" not in hashes:
+                hashes["v2"] = key
+        return hashes
+
     def _handle_hash_key(self, handle):
         keys = self._handle_hash_keys(handle)
         return keys[0] if keys else ""
+
+    def _handle_hash_dict(self, handle):
+        hashes = {}
+        try:
+            if hasattr(handle, "info_hashes"):
+                hashes.update(self._info_hash_dict(handle.info_hashes()))
+        except Exception:
+            pass
+        for key in self._handle_hash_keys(handle):
+            if len(key) == 40 and "v1" not in hashes:
+                hashes["v1"] = key
+            elif len(key) == 64 and "v2" not in hashes:
+                hashes["v2"] = key
+        return hashes
 
     def _handle_hash_keys(self, handle):
         keys = []
@@ -163,6 +208,30 @@ class SessionManager:
             if key and key not in out:
                 out.append(key)
         return out
+
+    def _db_entry_for_keys(self, keys):
+        for key in keys:
+            entry = self.torrents_db.get(key)
+            if entry:
+                return entry
+        for entry in self.torrents_db.values():
+            if not isinstance(entry, dict):
+                continue
+            stored_hashes = entry.get("hashes")
+            if not isinstance(stored_hashes, dict):
+                continue
+            aliases = {self._hash_object_key(value) for value in stored_hashes.values()}
+            if any(key in aliases for key in keys):
+                return entry
+        return None
+
+    def _state_key_for_hash(self, info_hash):
+        h = self._find_handle(info_hash)
+        if h:
+            key = self._handle_hash_key(h)
+            if key:
+                return key
+        return self._hash_object_key(info_hash)
 
     def apply_preferences(self, prefs):
         # Proxy Mapping
@@ -184,8 +253,8 @@ class SessionManager:
         port = _listen_port(prefs.get('listen_port', 6881))
 
         settings = {
-            'user_agent': 'qBittorrent/4.6.3',
-            'peer_fingerprint': b'-qB4630-',
+            'user_agent': QBITTORRENT_USER_AGENT,
+            'peer_fingerprint': QBITTORRENT_PEER_FINGERPRINT,
             'enable_dht': prefs.get('enable_dht', True),
             'enable_lsd': prefs.get('enable_lsd', True),
             'enable_upnp': prefs.get('enable_upnp', True),
@@ -263,7 +332,11 @@ class SessionManager:
             if alert.params.save_path:
                  with self.lock:
                      if ih not in self.torrents_db or self.torrents_db[ih].get('save_path') != alert.params.save_path:
-                          self.torrents_db[ih] = {'save_path': alert.params.save_path, 'added': time.time()}
+                          entry = {'save_path': alert.params.save_path, 'added': time.time()}
+                          hashes = self._info_hash_dict(alert.params.info_hashes)
+                          if hashes:
+                              entry['hashes'] = hashes
+                          self.torrents_db[ih] = entry
                           self._save_torrents_db()
 
         except Exception as e:
@@ -271,17 +344,19 @@ class SessionManager:
 
     def add_torrent_file(self, file_content, save_path, file_priorities=None):
         info = lt.torrent_info(file_content)
-        ih = ""
+        hashes = {}
         try:
             if hasattr(info, "info_hashes"):
-                ih = self._info_hash_key(info.info_hashes())
+                hashes = self._info_hash_dict(info.info_hashes())
         except Exception:
-            ih = ""
+            hashes = {}
+        ih = hashes.get("v1") or hashes.get("v2") or ""
         if not ih:
             ih = self._info_hash_key(info.info_hash())
         
         # Check if already exists
-        if self._find_handle(ih):
+        duplicate_keys = list(hashes.values()) or [ih]
+        if any(self._find_handle(key) for key in duplicate_keys):
             raise ValueError(f"Torrent with hash {ih} already exists.")
 
         # Save .torrent file for restoration
@@ -298,6 +373,8 @@ class SessionManager:
         if ih:
             with self.lock:
                 entry = {'save_path': save_path, 'added': time.time()}
+                if hashes:
+                    entry['hashes'] = hashes
                 if file_priorities:
                     entry['priorities'] = list(file_priorities)
                 self.torrents_db[ih] = entry
@@ -305,22 +382,24 @@ class SessionManager:
 
     def update_priorities(self, info_hash, priorities):
         with self.lock:
-            if info_hash in self.torrents_db:
+            state_key = self._state_key_for_hash(info_hash)
+            if state_key in self.torrents_db:
                 try:
                     # Convert vector to list if needed
                     p_list = list(priorities)
-                    self.torrents_db[info_hash]['priorities'] = p_list
+                    self.torrents_db[state_key]['priorities'] = p_list
                     self._save_torrents_db()
                 except Exception as e:
-                    print(f"Error updating priorities for {info_hash}: {e}")
+                    print(f"Error updating priorities for {state_key}: {e}")
 
     def add_magnet(self, url, save_path):
         params = lt.parse_magnet_uri(url)
         params.save_path = save_path
         
         # Check if already exists from magnet's hash
-        ih = self._info_hash_key(params.info_hashes)
-        if ih and self._find_handle(ih):
+        hashes = self._info_hash_dict(params.info_hashes)
+        ih = hashes.get("v1") or hashes.get("v2") or self._info_hash_key(params.info_hashes)
+        if any(self._find_handle(key) for key in (list(hashes.values()) or [ih])):
             raise ValueError(f"Magnet with hash {ih} already exists.")
         
         # We should also save the magnet URI itself for robust restoration if metadata is not fetched quickly
@@ -330,7 +409,10 @@ class SessionManager:
 
         if ih:
              with self.lock:
-                 self.torrents_db[ih] = {'save_path': save_path, 'added': time.time()}
+                 entry = {'save_path': save_path, 'added': time.time()}
+                 if hashes:
+                     entry['hashes'] = hashes
+                 self.torrents_db[ih] = entry
                  self._save_torrents_db()
 
     def load_state(self):
@@ -343,23 +425,27 @@ class SessionManager:
             for f in os.listdir(self.state_dir):
                 if f.endswith('.resume'):
                     try:
+                        ih_from_resume = f.replace('.resume', '')
                         with open(os.path.join(self.state_dir, f), 'rb') as fp:
                             data = fp.read()
                         params = lt.read_resume_data(data)
                         
                         ih = self._info_hash_key(params.info_hashes)
+                        resume_keys = self._info_hash_keys(params.info_hashes)
+                        if ih_from_resume:
+                            self._append_hash_key(resume_keys, ih_from_resume)
                         
                         # Use stored save_path if available to fix corrupted/missing resume path
-                        if ih in self.torrents_db:
-                            stored_path = self.torrents_db[ih].get('save_path')
+                        entry = self._db_entry_for_keys(resume_keys)
+                        if entry:
+                            stored_path = entry.get('save_path')
                             if stored_path: # and os.path.isdir(stored_path):
                                 params.save_path = stored_path
                         elif not params.save_path:
                              params.save_path = default_save_path
 
                         self.ses.add_torrent(params)
-                        if ih:
-                            loaded_hashes.add(ih)
+                        loaded_hashes.update(resume_keys)
                     except Exception as e:
                         print(f"Error loading resume data for {f}: {e}")
                         # If resume data fails, try to load .torrent directly if it exists.
@@ -374,8 +460,11 @@ class SessionManager:
                                     # Fallback to .torrent
                                     save_path = default_save_path
                                     priorities = None
-                                    if ih_from_resume in self.torrents_db:
-                                        entry = self.torrents_db[ih_from_resume]
+                                    torrent_keys = self._info_hash_keys(info.info_hashes()) if hasattr(info, "info_hashes") else []
+                                    if ih_from_resume:
+                                        self._append_hash_key(torrent_keys, ih_from_resume)
+                                    entry = self._db_entry_for_keys(torrent_keys)
+                                    if entry:
                                         if entry.get('save_path'):
                                             save_path = entry.get('save_path')
                                         if entry.get('priorities'):
@@ -394,8 +483,7 @@ class SessionManager:
                                         ih = ""
                                     if not ih:
                                         ih = self._info_hash_key(info.info_hash())
-                                    if ih:
-                                        loaded_hashes.add(ih)
+                                    loaded_hashes.update(key for key in (torrent_keys or [ih]) if key)
                                     print(f"Successfully loaded {ih_from_resume}.torrent after resume data failure using tracked path.")
                             except Exception as tf_e:
                                 print(f"Failed to load .torrent file {torrent_file_path} as fallback: {tf_e}")
@@ -405,28 +493,37 @@ class SessionManager:
             for f in os.listdir(self.state_dir):
                 if f.endswith('.torrent'):
                     ih = f.replace('.torrent', '')
-                    if ih not in loaded_hashes:
-                        try:
-                            with open(os.path.join(self.state_dir, f), 'rb') as tfp:
-                                torrent_content = tfp.read()
-                                info = lt.torrent_info(torrent_content)
-                                
-                                save_path = default_save_path
-                                priorities = None
-                                if ih in self.torrents_db:
-                                    entry = self.torrents_db[ih]
-                                    if entry.get('save_path'):
-                                        save_path = entry.get('save_path')
-                                    if entry.get('priorities'):
-                                        priorities = entry.get('priorities')
+                    torrent_keys = [ih] if ih else []
+                    try:
+                        with open(os.path.join(self.state_dir, f), 'rb') as tfp:
+                            torrent_content = tfp.read()
+                            info = lt.torrent_info(torrent_content)
+                        if hasattr(info, "info_hashes"):
+                            for key in self._info_hash_keys(info.info_hashes()):
+                                if key not in torrent_keys:
+                                    torrent_keys.append(key)
+                    except Exception as e:
+                        print(f"Error loading torrent file {f}: {e}")
+                        continue
 
-                                params = {'ti': info, 'save_path': save_path}
-                                if priorities:
-                                    params['file_priorities'] = priorities
-                                
-                                self.ses.add_torrent(params)
-                                loaded_hashes.add(ih)
-                                print(f"Loaded {ih}.torrent from file (no resume data) using tracked path.")
+                    if not any(key in loaded_hashes for key in torrent_keys):
+                        try:
+                            save_path = default_save_path
+                            priorities = None
+                            entry = self._db_entry_for_keys(torrent_keys)
+                            if entry:
+                                if entry.get('save_path'):
+                                    save_path = entry.get('save_path')
+                                if entry.get('priorities'):
+                                    priorities = entry.get('priorities')
+
+                            params = {'ti': info, 'save_path': save_path}
+                            if priorities:
+                                params['file_priorities'] = priorities
+                            
+                            self.ses.add_torrent(params)
+                            loaded_hashes.update(key for key in torrent_keys if key)
+                            print(f"Loaded {ih}.torrent from file (no resume data) using tracked path.")
                         except Exception as e:
                             print(f"Error loading torrent file {f}: {e}")
 
@@ -507,6 +604,16 @@ class SessionManager:
                 self.pending_saves.discard(key)
                 if key in self.torrents_db:
                     del self.torrents_db[key]
+                    changed = True
+            for db_key, entry in list(self.torrents_db.items()):
+                if not isinstance(entry, dict):
+                    continue
+                stored_hashes = entry.get("hashes")
+                if not isinstance(stored_hashes, dict):
+                    continue
+                aliases = {self._hash_object_key(value) for value in stored_hashes.values()}
+                if any(key in aliases for key in keys):
+                    del self.torrents_db[db_key]
                     changed = True
             if changed:
                 self._save_torrents_db()

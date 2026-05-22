@@ -188,8 +188,14 @@ def create_torrent_bytes(
         # Fallback: may not be available on some versions
         info_hash = ""
 
-    magnet = f"magnet:?xt=urn:btih:{info_hash}" if info_hash else ""
-    if magnet:
+    magnet = ""
+    try:
+        if hasattr(lt, "make_magnet_uri"):
+            magnet = lt.make_magnet_uri(ti)
+    except Exception:
+        magnet = ""
+    if not magnet and info_hash:
+        magnet = f"magnet:?xt=urn:btih:{info_hash}"
         for tr in trackers or []:
             tr = (tr or "").strip()
             if tr:

@@ -25,6 +25,29 @@ def test_parse_magnet_infohash_invalid():
     assert torrent_parsing.parse_magnet_infohash("magnet:?xt=urn:btih:ZZZ") is None
 
 
+def test_parse_magnet_infohash_btmh():
+    v2_hash = "a" * 64
+    url = f"magnet:?xt=urn:btmh:1220{v2_hash}"
+    assert torrent_parsing.parse_magnet_infohash(url) == v2_hash
+
+
+def test_parse_magnet_infohash_hybrid_prefers_v1():
+    v1_hash = "1" * 40
+    v2_hash = "2" * 64
+    url = f"magnet:?xt=urn:btmh:1220{v2_hash}&xt=urn:btih:{v1_hash}"
+    assert torrent_parsing.parse_magnet_infohash(url) == v1_hash
+
+
+def test_build_magnet_from_hybrid_hashes():
+    v1_hash = "1" * 40
+    v2_hash = "2" * 64
+    magnet = torrent_parsing.build_magnet_from_hashes(v1_hash, v2_hash, "Hybrid")
+
+    assert f"xt=urn%3Abtih%3A{v1_hash}" in magnet
+    assert f"xt=urn%3Abtmh%3A1220{v2_hash}" in magnet
+    assert "dn=Hybrid" in magnet
+
+
 @given(st.text(min_size=0, max_size=200))
 def test_parse_magnet_infohash_never_crashes(text):
     result = torrent_parsing.parse_magnet_infohash(text)

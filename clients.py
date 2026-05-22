@@ -659,10 +659,12 @@ class LocalClient(BaseClient):
                 else:
                     av = 0
                 hv = 1 if s.state in [lt.torrent_status.checking_files, lt.torrent_status.queued_for_checking] else 0
-                ih = h.info_hash()
-                ihs = str(ih)
-                if len(ihs) != 40:
-                    ihs = binascii.hexlify(ih.to_string()).decode('ascii')
+                ihs = self.m._handle_hash_key(h)
+                if not ihs:
+                    ih = h.info_hash()
+                    ihs = str(ih)
+                    if len(ihs) != 40:
+                        ihs = binascii.hexlify(ih.to_string()).decode('ascii')
                 ratio = (s.all_time_upload / s.all_time_download * 1000) if s.all_time_download > 0 else 0
                 eta = int((s.total_wanted - s.total_wanted_done) / s.download_payload_rate) if s.download_payload_rate > 0 else -1
                 ac = None
@@ -701,14 +703,7 @@ class LocalClient(BaseClient):
         st = self.m.get_status()
         return st.payload_download_rate, st.payload_upload_rate
     def _gh(self, i):
-        for h in self.m.get_torrents():
-            ih = h.info_hash()
-            ihs = str(ih)
-            if len(ihs) != 40:
-                ihs = binascii.hexlify(ih.to_string()).decode('ascii')
-            if ihs == i:
-                return h
-        return None
+        return self.m._find_handle(i)
     def recheck_torrent(self, h):
         x = self._gh(h)
         if x:

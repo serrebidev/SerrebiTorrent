@@ -26,6 +26,22 @@ POPULAR_TRACKERS: List[str] = [
 ]
 
 
+def _torrent_info_hash(info) -> str:
+    try:
+        if hasattr(info, "info_hashes"):
+            hashes = info.info_hashes()
+            if hashes.has_v1():
+                return str(hashes.v1)
+            if hashes.has_v2():
+                return str(hashes.v2)
+    except Exception:
+        pass
+    try:
+        return str(info.info_hash())
+    except Exception:
+        return ""
+
+
 PIECE_SIZE_CHOICES = [
     ("Auto", 0),
     ("16 KiB", 16 * 1024),
@@ -167,7 +183,7 @@ def create_torrent_bytes(
     info_hash = ""
     try:
         ti = lt.torrent_info(torrent_bytes)
-        info_hash = str(ti.info_hash())
+        info_hash = _torrent_info_hash(ti)
     except Exception:
         # Fallback: may not be available on some versions
         info_hash = ""

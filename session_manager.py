@@ -97,31 +97,72 @@ class SessionManager:
         except Exception as e:
             print(f"Error saving torrents.json: {e}")
 
-    def _info_hash_key(self, info_hashes):
-        if info_hashes is None:
+    def _hash_object_key(self, value):
+        if value is None:
             return ""
+        try:
+            if hasattr(value, "to_string"):
+                raw = value.to_string()
+                if isinstance(raw, (bytes, bytearray, memoryview)):
+                    raw = bytes(raw)
+                    if len(raw) in (20, 32):
+                        return raw.hex()
+                    try:
+                        return raw.decode("ascii").strip().lower()
+                    except Exception:
+                        return raw.decode("utf-8", "ignore").strip().lower()
+        except Exception:
+            pass
+        try:
+            text = str(value).strip()
+        except Exception:
+            return ""
+        if text and all(c in "0123456789abcdefABCDEF" for c in text) and len(text) in (40, 64):
+            return text.lower()
+        return text
+
+    def _info_hash_keys(self, info_hashes):
+        if info_hashes is None:
+            return []
+        keys = []
         try:
             if hasattr(info_hashes, "has_v1") and info_hashes.has_v1():
-                return str(info_hashes.v1)
+                keys.append(self._hash_object_key(info_hashes.v1))
             if hasattr(info_hashes, "has_v2") and info_hashes.has_v2():
-                return str(info_hashes.v2)
+                keys.append(self._hash_object_key(info_hashes.v2))
         except Exception:
             pass
-        try:
-            return str(info_hashes)
-        except Exception:
-            return ""
+        keys.append(self._hash_object_key(info_hashes))
+        out = []
+        for key in keys:
+            if key and key not in out:
+                out.append(key)
+        return out
+
+    def _info_hash_key(self, info_hashes):
+        keys = self._info_hash_keys(info_hashes)
+        return keys[0] if keys else ""
 
     def _handle_hash_key(self, handle):
+        keys = self._handle_hash_keys(handle)
+        return keys[0] if keys else ""
+
+    def _handle_hash_keys(self, handle):
+        keys = []
         try:
             if hasattr(handle, "info_hashes"):
-                return self._info_hash_key(handle.info_hashes())
+                keys.extend(self._info_hash_keys(handle.info_hashes()))
         except Exception:
             pass
         try:
-            return self._info_hash_key(handle.info_hash())
+            keys.extend(self._info_hash_keys(handle.info_hash()))
         except Exception:
-            return ""
+            pass
+        out = []
+        for key in keys:
+            if key and key not in out:
+                out.append(key)
+        return out
 
     def apply_preferences(self, prefs):
         # Proxy Mapping
@@ -434,16 +475,47 @@ class SessionManager:
             self._save_torrents_db()
 
     def _find_handle(self, info_hash_str):
+        wanted = self._hash_object_key(info_hash_str)
+        if not wanted:
+            return None
         for h in self.ses.get_torrents():
-             if self._handle_hash_key(h) == info_hash_str:
-                 return h
+            if wanted in self._handle_hash_keys(h):
+                return h
         return None
+
+    def _cleanup_torrent_state(self, info_hashes):
+        keys = []
+        for info_hash in info_hashes:
+            key = self._hash_object_key(info_hash)
+            if key and key not in keys:
+                keys.append(key)
+        if not keys:
+            return
+
+        for key in keys:
+            for suffix in ('.torrent', '.resume'):
+                path = os.path.join(self.state_dir, key + suffix)
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except Exception as e:
+                    print(f"Error removing state file {path}: {e}")
+
+        with self.lock:
+            changed = False
+            for key in keys:
+                self.pending_saves.discard(key)
+                if key in self.torrents_db:
+                    del self.torrents_db[key]
+                    changed = True
+            if changed:
+                self._save_torrents_db()
 
     def remove_torrent(self, info_hash, delete_files=False):
         h = self._find_handle(info_hash)
+        state_keys = [info_hash]
         if h:
-            # Remove from session
-            # Remove from session.
+            state_keys.extend(self._handle_hash_keys(h))
             flags = 0
             if delete_files:
                 flags = 1
@@ -455,25 +527,7 @@ class SessionManager:
                 except Exception:
                     flags = 1
             self.ses.remove_torrent(h, flags)
-            
-            # Clean up state files to prevent resurrection
-            try:
-                t_path = os.path.join(self.state_dir, info_hash + '.torrent')
-                if os.path.exists(t_path):
-                    os.remove(t_path)
-                    
-                r_path = os.path.join(self.state_dir, info_hash + '.resume')
-                if os.path.exists(r_path):
-                    os.remove(r_path)
-                
-                # Remove from DB
-                with self.lock:
-                    if info_hash in self.torrents_db:
-                        del self.torrents_db[info_hash]
-                        self._save_torrents_db()
-                    
-            except Exception as e:
-                print(f"Error cleaning up state files for {info_hash}: {e}")
+        self._cleanup_torrent_state(state_keys)
 
     def get_torrents(self):
         return self.ses.get_torrents()

@@ -86,6 +86,12 @@ def safe_torrent_info_hash(data: bytes) -> Optional[str]:
         return None
     try:
         info = lt.torrent_info(data)
+        if hasattr(info, "info_hashes"):
+            hashes = info.info_hashes()
+            if hashes.has_v1():
+                return str(hashes.v1)
+            if hashes.has_v2():
+                return str(hashes.v2)
         return str(info.info_hash())
     except Exception:
         return None

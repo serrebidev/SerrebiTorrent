@@ -1,6 +1,7 @@
 import binascii
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import clients
@@ -82,6 +83,63 @@ class RemoveTorrentsTests(unittest.TestCase):
                 client.remove_torrents([raw_hash], df="false")
 
         self.assertEqual(fake_session.calls, [(expected_hash, False)])
+
+    def test_local_torrent_rows_use_session_canonical_hash(self):
+        v1_hash = "0ecb0b05fa9334995a9b71373c4a31ed519ab5ff"
+
+        fake_status = SimpleNamespace(
+            paused=False,
+            auto_managed=True,
+            state=3,
+            name="Hybrid torrent",
+            total_wanted=10,
+            total_wanted_done=0,
+            all_time_upload=0,
+            all_time_download=0,
+            download_payload_rate=0,
+            upload_payload_rate=0,
+            errc=None,
+            num_seeds=0,
+            num_complete=0,
+            num_peers=0,
+            num_connections=0,
+            num_incomplete=0,
+            current_tracker="",
+            save_path="C:\\Downloads",
+        )
+        fake_handle = SimpleNamespace(
+            is_valid=lambda: True,
+            status=lambda: fake_status,
+        )
+
+        class FakeSessionManager:
+            @classmethod
+            def get_instance(cls):
+                return cls()
+
+            def get_torrents(self):
+                return [fake_handle]
+
+            def _handle_hash_key(self, handle):
+                return v1_hash
+
+        fake_lt = SimpleNamespace(
+            version="test",
+            torrent_status=SimpleNamespace(
+                seeding=5,
+                finished=4,
+                checking_files=1,
+                queued_for_checking=0,
+            ),
+        )
+
+        with mock.patch.object(clients, "SessionManager", FakeSessionManager), \
+            mock.patch.object(clients, "lt", fake_lt):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                client = clients.LocalClient(temp_dir)
+                rows = client.get_torrents_full()
+
+        self.assertEqual(rows[0]["hash"], v1_hash)
 
 
 if __name__ == "__main__":

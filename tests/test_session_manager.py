@@ -154,3 +154,75 @@ def test_remove_torrent(session_manager, mock_libtorrent_environment):
          
          session_manager.ses.remove_torrent.assert_called()
          assert info_hash not in session_manager.torrents_db
+
+
+class FakeHash:
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return self.value
+
+    def to_string(self):
+        return bytes.fromhex(self.value)
+
+
+class FakeInfoHashes:
+    def __init__(self, v1, v2):
+        self.v1 = FakeHash(v1)
+        self.v2 = FakeHash(v2)
+
+    def has_v1(self):
+        return True
+
+    def has_v2(self):
+        return True
+
+
+class FakeHybridHandle:
+    def __init__(self, v1, v2):
+        self._hashes = FakeInfoHashes(v1, v2)
+        self._legacy_hash = FakeHash(v2[:40])
+
+    def info_hashes(self):
+        return self._hashes
+
+    def info_hash(self):
+        return self._legacy_hash
+
+
+def test_find_handle_accepts_hybrid_v2_display_hash(session_manager):
+    v1 = "0ecb0b05fa9334995a9b71373c4a31ed519ab5ff"
+    v2 = "45e8ad4452fc70825ac06a07369d26f711e384ae89a382bd2e3d77d0166496b6"
+    handle = FakeHybridHandle(v1, v2)
+    session_manager.ses.get_torrents.return_value = [handle]
+
+    assert session_manager._handle_hash_key(handle) == v1
+    assert session_manager._find_handle(v2[:40]) is handle
+    assert session_manager._find_handle(v2) is handle
+
+
+def test_remove_hybrid_display_hash_cleans_v1_state(session_manager):
+    v1 = "0ecb0b05fa9334995a9b71373c4a31ed519ab5ff"
+    v2 = "45e8ad4452fc70825ac06a07369d26f711e384ae89a382bd2e3d77d0166496b6"
+    handle = FakeHybridHandle(v1, v2)
+    session_manager.ses.get_torrents.return_value = [handle]
+    session_manager.torrents_db[v1] = {'save_path': '/tmp'}
+
+    with patch('os.path.exists', return_value=False):
+        session_manager.remove_torrent(v2[:40])
+
+    session_manager.ses.remove_torrent.assert_called_once()
+    assert v1 not in session_manager.torrents_db
+
+
+def test_remove_cleans_known_state_even_without_handle(session_manager):
+    info_hash = "2" * 40
+    session_manager.ses.get_torrents.return_value = []
+    session_manager.torrents_db[info_hash] = {'save_path': '/tmp'}
+
+    with patch('os.path.exists', return_value=False):
+        session_manager.remove_torrent(info_hash)
+
+    session_manager.ses.remove_torrent.assert_not_called()
+    assert info_hash not in session_manager.torrents_db

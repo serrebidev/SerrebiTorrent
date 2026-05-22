@@ -282,6 +282,17 @@ class SessionManager:
         
         self.ses.apply_settings(settings)
 
+        # IP reported to trackers (announce &ip=). Useful when inbound peer traffic
+        # is forwarded from a public relay/VPS whose address differs from the local
+        # egress IP. Applied separately and guarded because the setting was deprecated
+        # in some libtorrent builds; a failure here must not drop the core settings.
+        announce_ip = str(prefs.get('announce_ip', '') or '').strip()
+        try:
+            self.ses.apply_settings({'announce_ip': announce_ip})
+        except Exception as e:
+            if announce_ip:
+                print(f"announce_ip not supported by this libtorrent build: {e}")
+
     def _alert_loop(self):
         while self.running:
             try:

@@ -944,7 +944,13 @@ class PreferencesDialog(wx.Dialog):
         self.port_input = wx.SpinCtrl(conn_panel, min=1, max=65535, initial=self.prefs.get('listen_port', 6881))
         port_sizer.Add(self.port_input, 0)
         conn_sizer.Add(port_sizer, 0, wx.ALL, 10)
-        
+
+        ann_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        ann_sizer.Add(wx.StaticText(conn_panel, label="Announce IP (reported to trackers, blank = auto):"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.announce_ip_input = wx.TextCtrl(conn_panel, value=self.prefs.get('announce_ip', ''))
+        ann_sizer.Add(self.announce_ip_input, 1, wx.EXPAND)
+        conn_sizer.Add(ann_sizer, 0, wx.EXPAND | wx.ALL, 10)
+
         self.upnp_chk = wx.CheckBox(conn_panel, label="Enable UPnP Port Mapping")
         self.upnp_chk.SetValue(self.prefs.get('enable_upnp', True))
         conn_sizer.Add(self.upnp_chk, 0, wx.ALL, 5)
@@ -1111,6 +1117,7 @@ class PreferencesDialog(wx.Dialog):
             "max_connections": self.max_conn.GetValue(),
             "max_uploads": self.max_slots.GetValue(),
             "listen_port": self.port_input.GetValue(),
+            "announce_ip": self.announce_ip_input.GetValue().strip(),
             "enable_upnp": self.upnp_chk.GetValue(),
             "enable_natpmp": self.natpmp_chk.GetValue(),
             "enable_dht": self.dht_chk.GetValue() if hasattr(self, "dht_chk") else self.prefs.get("enable_dht", True),

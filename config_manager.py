@@ -38,6 +38,7 @@ DEFAULT_PREFERENCES: Dict[str, Any] = {
     "max_connections": -1,  # -1 = unlimited
     "max_uploads": -1,  # -1 = unlimited
     "listen_port": 6881,
+    "announce_ip": "",  # IP reported to trackers (e.g. a public relay/VPS address); blank = auto
     "enable_upnp": True,
     "enable_natpmp": True,
     "enable_dht": True,

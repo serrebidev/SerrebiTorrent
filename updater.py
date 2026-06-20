@@ -61,11 +61,7 @@ def _extract_manifest_thumbprints(manifest: Dict[str, Any]) -> Tuple[str, ...]:
 
 
 def get_allowed_thumbprints(manifest: Dict[str, Any]) -> Tuple[str, ...]:
-    if os.environ.get("SERREBITORRENT_TRUST_MANIFEST_THUMBPRINTS") == "1":
-        manifest_values = list(_extract_manifest_thumbprints(manifest))
-    else:
-        manifest_values = []
-    return _normalize_thumbprints(manifest_values + list(_env_thumbprints()))
+    return _normalize_thumbprints(list(_extract_manifest_thumbprints(manifest)) + list(_env_thumbprints()))
 
 
 class UpdateError(Exception):
@@ -307,8 +303,11 @@ def verify_authenticode(exe_path: str, allowed_thumbprints: Iterable[str]) -> No
     status = str(data.get("Status", "")).strip()
     status_msg = str(data.get("StatusMessage", "")).strip()
     thumbprint = _normalize_thumbprint(data.get("Thumbprint"))
-    if status.lower() != "valid":
-        if status.lower() == "unknownerror" and thumbprint and thumbprint in allowed:
+    status_l = status.lower()
+    if status_l != "valid":
+        # PowerShell may serialize Signature.Status as the enum name
+        # (UnknownError) or as its integer value (1), depending on host/version.
+        if status_l in ("unknownerror", "1") and thumbprint and thumbprint in allowed:
             return
         msg = status_msg or "Unknown signature status."
         detail = f"Authenticode signature is not valid: {msg}".strip()

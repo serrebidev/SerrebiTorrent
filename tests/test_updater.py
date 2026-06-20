@@ -16,6 +16,7 @@ from updater import (
     UpdateInfo,
     check_for_update,
     get_allowed_thumbprints,
+    verify_authenticode,
     APP_VERSION
 )
 
@@ -115,20 +116,28 @@ def test_validate_manifest_rejects_release_asset_mismatch():
         validate_manifest(manifest, release)
 
 
-def test_manifest_thumbprints_are_not_trusted_by_default(monkeypatch):
+def test_manifest_thumbprints_are_trusted(monkeypatch):
     manifest = {"signing_thumbprint": "AA BB"}
     monkeypatch.delenv("SERREBITORRENT_TRUSTED_SIGNING_THUMBPRINTS", raising=False)
-    monkeypatch.delenv("SERREBITORRENT_TRUST_MANIFEST_THUMBPRINTS", raising=False)
 
-    assert get_allowed_thumbprints(manifest) == ()
+    assert get_allowed_thumbprints(manifest) == ("AABB",)
 
 
 def test_env_thumbprints_are_trusted(monkeypatch):
     manifest = {"signing_thumbprint": "AA BB"}
     monkeypatch.setenv("SERREBITORRENT_TRUSTED_SIGNING_THUMBPRINTS", "CC DD")
-    monkeypatch.delenv("SERREBITORRENT_TRUST_MANIFEST_THUMBPRINTS", raising=False)
 
-    assert get_allowed_thumbprints(manifest) == ("CCDD",)
+    assert get_allowed_thumbprints(manifest) == ("AABB", "CCDD")
+
+
+def test_verify_authenticode_allows_numeric_unknownerror_with_matching_thumbprint(monkeypatch):
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = '{"Status":1,"StatusMessage":"chain not trusted","Thumbprint":"AA BB"}'
+    result.stderr = ""
+    monkeypatch.setattr("updater.subprocess.run", lambda *args, **kwargs: result)
+
+    verify_authenticode("SerrebiTorrent.exe", ["AABB"])
 
 
 @patch('updater.fetch_latest_release')

@@ -21,6 +21,13 @@ def test_parse_magnet_infohash_base32():
     assert torrent_parsing.parse_magnet_infohash(url) == expected
 
 
+def test_btih_rejects_32_byte_base32_payload():
+    raw = b"\x01" * 32
+    b32 = base64.b32encode(raw).decode("ascii")
+    url = f"magnet:?xt=urn:btih:{b32}"
+    assert torrent_parsing.parse_magnet_infohash(url) is None
+
+
 def test_parse_magnet_infohash_invalid():
     assert torrent_parsing.parse_magnet_infohash("magnet:?xt=urn:btih:ZZZ") is None
 
@@ -29,6 +36,12 @@ def test_parse_magnet_infohash_btmh():
     v2_hash = "a" * 64
     url = f"magnet:?xt=urn:btmh:1220{v2_hash}"
     assert torrent_parsing.parse_magnet_infohash(url) == v2_hash
+
+
+def test_btmh_requires_multihash_prefix():
+    v2_hash = "a" * 64
+    url = f"magnet:?xt=urn:btmh:{v2_hash}"
+    assert torrent_parsing.parse_magnet_infohash(url) is None
 
 
 def test_parse_magnet_infohash_hybrid_prefers_v1():

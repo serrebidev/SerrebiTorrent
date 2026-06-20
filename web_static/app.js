@@ -15,6 +15,30 @@ let visibleTorrents = [];
 // Throttling
 let lastProfileFetch = 0;
 let detailsTimeout = null;
+let csrfToken = null;
+
+async function ensureCsrfToken() {
+    if (csrfToken) return csrfToken;
+    const res = await fetch('/api/v2/auth/csrf');
+    if (res.status === 403) {
+        window.location.href = '/login.html';
+        throw new Error('Unauthorized');
+    }
+    const data = await res.json();
+    csrfToken = data.csrf_token;
+    return csrfToken;
+}
+
+async function apiFetch(url, options = {}) {
+    const method = (options.method || 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+        const token = await ensureCsrfToken();
+        const headers = new Headers(options.headers || {});
+        headers.set('X-CSRF-Token', token);
+        options.headers = headers;
+    }
+    return fetch(url, options);
+}
 
 const els = {
     tbody: () => document.getElementById('torrentTableBody'),
@@ -140,7 +164,7 @@ window.addEventListener('DOMContentLoaded', () => {
             for (let i = 0; i < files.length; i++) {
                 formData.append('torrents', files[i]);
             }
-            const res = await fetch('/api/v2/torrents/add', { method: 'POST', body: formData });
+            const res = await apiFetch('/api/v2/torrents/add', { method: 'POST', body: formData });
             if (res.ok) {
                 const modal = bootstrap.Modal.getInstance(document.getElementById('addTorrentModal'));
                 if (modal) modal.hide();
@@ -268,7 +292,7 @@ window.addEventListener('DOMContentLoaded', () => {
             if (minTray) data['min_to_tray'] = !!minTray.checked;
             
             try {
-                const res = await fetch('/api/v2/app/prefs', {
+                const res = await apiFetch('/api/v2/app/prefs', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(data)
@@ -303,7 +327,7 @@ window.addEventListener('DOMContentLoaded', () => {
             });
             
             try {
-                const res = await fetch('/api/v2/app/remote_prefs', {
+                const res = await apiFetch('/api/v2/app/remote_prefs', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(data)
@@ -665,7 +689,7 @@ async function switchProfile(id, event) {
     if (id === currentProfileId) return;
     announceToSR("Switching client profile...");
     const fd = new FormData(); fd.append('id', id);
-    const res = await fetch('/api/v2/profiles/switch', { method: 'POST', body: fd });
+    const res = await apiFetch('/api/v2/profiles/switch', { method: 'POST', body: fd });
     if (res.ok) { 
         selectedHashes.clear(); 
         lastFocusedHash = null; 
@@ -693,6 +717,10 @@ async function switchProfile(id, event) {
 
 function updateDetailsDebounced() { if (detailsTimeout) clearTimeout(detailsTimeout); detailsTimeout = setTimeout(updateDetails, 200); }
 
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 async function updateDetails() {
     const detailPane = document.getElementById('details-general');
     if (selectedHashes.size === 0) { detailPane.innerHTML = '<p>Select a torrent.</p>'; return; }
@@ -700,7 +728,8 @@ async function updateDetails() {
     const hash = Array.from(selectedHashes)[0];
     const t = torrentsMap.get(hash);
     if (!t) return;
-    detailPane.innerHTML = `<h3 class="fs-5">${t.name}</h3><p>Size: ${fmtSize(t.size)}<br>Hash: ${t.hash}<br>Path: ${t.save_path || 'N/A'}</p>`;
+    // Escape torrent-supplied fields (name/hash/save_path) to prevent DOM XSS.
+    detailPane.innerHTML = `<h3 class="fs-5">${escapeHtml(t.name)}</h3><p>Size: ${fmtSize(t.size)}<br>Hash: ${escapeHtml(t.hash)}<br>Path: ${escapeHtml(t.save_path || 'N/A')}</p>`;
 }
 
 async function doAction(action, deleteFiles = false) {
@@ -708,7 +737,7 @@ async function doAction(action, deleteFiles = false) {
     const formData = new FormData();
     formData.append('hashes', Array.from(selectedHashes).join('|'));
     if (deleteFiles) formData.append('deleteFiles', 'true');
-    const res = await fetch(`/api/v2/torrents/${action}`, { method: 'POST', body: formData });
+    const res = await apiFetch(`/api/v2/torrents/${action}`, { method: 'POST', body: formData });
     if (res.ok) { 
         hideContextMenu(); 
         setTimeout(() => refreshData(true), 100); 
@@ -722,7 +751,7 @@ function fmtSize(bytes) {
     return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + units[i];
 }
 
-async function logout() { await fetch('/api/v2/auth/logout', { method: 'POST' }); window.location.href = '/login.html'; }
+async function logout() { await apiFetch('/api/v2/auth/logout', { method: 'POST' }); window.location.href = '/login.html'; }
 
 function announceToSR(m, assertive = false) {
     const a = els.aria();

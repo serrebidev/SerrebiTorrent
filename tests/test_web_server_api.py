@@ -22,6 +22,11 @@ def auth_client(client):
     client.post('/api/v2/auth/login', data={'username': 'admin', 'password': 'password'})
     return client
 
+
+def csrf_headers(client):
+    with client.session_transaction() as session:
+        return {'X-CSRF-Token': session['csrf_token']}
+
 def test_login(client):
     rv = client.post('/api/v2/auth/login', data={'username': 'admin', 'password': 'password'})
     assert b"Ok." in rv.data
@@ -29,6 +34,24 @@ def test_login(client):
     
     rv = client.post('/api/v2/auth/login', data={'username': 'admin', 'password': 'wrong'})
     assert rv.status_code == 403
+
+
+def test_web_ui_does_not_start_with_default_password(monkeypatch):
+    original = web_server.WEB_CONFIG.copy()
+    original_thread = web_server.server_thread
+    thread_ctor = MagicMock()
+    try:
+        web_server.WEB_CONFIG.update({'password': 'password', 'enabled': True})
+        web_server.server_thread = None
+        monkeypatch.setattr(web_server.threading, 'Thread', thread_ctor)
+
+        web_server.start_web_ui()
+
+        thread_ctor.assert_not_called()
+        assert web_server.server_thread is None
+    finally:
+        web_server.WEB_CONFIG.update(original)
+        web_server.server_thread = original_thread
 
 def test_profiles_endpoint(auth_client):
     mock_app = MagicMock()
@@ -64,7 +87,11 @@ def test_torrents_add_endpoint(auth_client):
     mock_client = MagicMock()
     web_server.WEB_CONFIG['client'] = mock_client
     
-    rv = auth_client.post('/api/v2/torrents/add', data={'urls': 'magnet:?foo', 'savepath': '/tmp'})
+    rv = auth_client.post(
+        '/api/v2/torrents/add',
+        data={'urls': 'magnet:?foo', 'savepath': '/tmp'},
+        headers=csrf_headers(auth_client),
+    )
     assert rv.status_code == 200
     mock_client.add_torrent_url.assert_called_with('magnet:?foo', sp='/tmp')
 

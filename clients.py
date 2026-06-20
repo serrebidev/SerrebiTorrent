@@ -8,6 +8,8 @@ from urllib.parse import quote, urlparse, urlunparse
 import requests
 from torrent_parsing import build_magnet_from_hashes
 
+MAX_TORRENT_DOWNLOAD_BYTES = 64 * 1024 * 1024
+
 
 def safe_encode_url(url):
     """Encode special characters (like brackets) in URL path for requests compatibility."""
@@ -15,6 +17,22 @@ def safe_encode_url(url):
     # Encode the path, preserving slashes
     encoded_path = quote(parsed.path, safe='/:@')
     return urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+
+
+def download_torrent_url(url, timeout=30):
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in ("http", "https"):
+        raise ValueError("Torrent URL must use http or https.")
+    content = b""
+    with requests.get(safe_encode_url(url), timeout=timeout, stream=True) as r:
+        r.raise_for_status()
+        for chunk in r.iter_content(1024 * 1024):
+            if not chunk:
+                continue
+            content += chunk
+            if len(content) > MAX_TORRENT_DOWNLOAD_BYTES:
+                raise ValueError("Torrent download exceeds 64 MB limit.")
+    return content
 
 from libtorrent_env import prepare_libtorrent_dlls
 
@@ -301,7 +319,7 @@ class RTorrentClient(BaseClient):
             for t in raw:
                 h, dr, lb = t[0], self._si(t[8]), self._si(t[12])
                 res.append({
-                    "hash": h, "name": self._ss(t[10]), "size": self._si(t[11]), "done": self._si(t[1]), "up_total": self._si(t[2]), "ratio": self._si(t[3]), "state": self._si(t[4]), "active": self._si(t[5]), "hashing": self._si(t[6]), "message": self._ss(t[7]), "down_rate": dr, "up_rate": self._si(t[9]), "tracker_domain": self.tc.get(h, ""), "save_path": self._ss(t[17]) if len(t)>17 else None, "eta": int(lb/dr) if dr>0 and lb>0 else -1, "seeds_connected": self._si(t[13]), "seeds_total": self._si(t[15]), "leechers_connected": self._si(t[14]), "leechers_total": self._si(t[16])
+                    "hash": h, "name": self._ss(t[10]), "size": self._si(t[11]), "done": self._si(t[1]), "up_total": self._si(t[2]), "ratio": self._si(t[3]), "state": self._si(t[4]), "active": self._si(t[5]), "hashing": self._si(t[6]), "message": self._ss(t[7]), "down_rate": dr, "up_rate": self._si(t[9]), "tracker_domain": self.tc.get(h, ""), "save_path": self._ss(t[17]) if len(t)>17 else None, "eta": int(lb/dr) if dr>0 and lb>0 else -1, "seeds_connected": self._si(t[15]), "seeds_total": self._si(t[15]), "leechers_connected": self._si(t[16]), "leechers_total": self._si(t[16])
                 })
             return res
         except Exception as e:
@@ -323,10 +341,16 @@ class RTorrentClient(BaseClient):
         self.srv.d.erase(h)
 
     def add_torrent_url(self, u, sp=None):
-        self.srv.load.start("", u)
+        if sp:
+            self.srv.load.start("", u, f"d.directory.set={sp}")
+        else:
+            self.srv.load.start("", u)
 
     def add_torrent_file(self, c, sp=None, p=None):
-        self.srv.load.raw_start("", xmlrpc.client.Binary(c))
+        if sp:
+            self.srv.load.raw_start("", xmlrpc.client.Binary(c), f"d.directory.set={sp}")
+        else:
+            self.srv.load.raw_start("", xmlrpc.client.Binary(c))
 
     def get_global_stats(self):
         try:
@@ -457,8 +481,14 @@ class QBittorrentClient(BaseClient):
         if not hashes:
             return
         self.c.torrents_delete(torrent_hashes=hashes, delete_files=self._normalize_delete_files(df))
-    def add_torrent_url(self, u, sp=None): self.c.torrents_add(urls=u, save_path=sp)
-    def add_torrent_file(self, c, sp=None, p=None): self.c.torrents_add(torrent_files=c, save_path=sp)
+    def add_torrent_url(self, u, sp=None):
+        res = self.c.torrents_add(urls=u, save_path=sp)
+        if isinstance(res, str) and res.strip().lower() == "fails.":
+            raise RuntimeError("qBittorrent rejected the URL (Fails.)")
+    def add_torrent_file(self, c, sp=None, p=None):
+        res = self.c.torrents_add(torrent_files=c, save_path=sp)
+        if isinstance(res, str) and res.strip().lower() == "fails.":
+            raise RuntimeError("qBittorrent rejected the torrent file (Fails.)")
     def recheck_torrent(self, h): self.c.torrents_recheck(torrent_hashes=h)
     def reannounce_torrent(self, h): self.c.torrents_reannounce(torrent_hashes=h)
     def get_global_stats(self):
@@ -500,6 +530,20 @@ class TransmissionClient(BaseClient):
         p = urlparse(u)
         self.c = TransClient(host=p.hostname, port=p.port, username=us, password=pw, protocol=p.scheme)
     def test_connection(self): return self.c.server_version
+    def _swarm_counts(self, t):
+        """Best-available swarm seed/leecher totals from tracker scrape stats."""
+        seeds = leechers = 0
+        try:
+            for s in (getattr(t, "tracker_stats", None) or []):
+                sc = getattr(s, "seeder_count", -1)
+                lc = getattr(s, "leecher_count", -1)
+                if sc and sc > seeds:
+                    seeds = sc
+                if lc and lc > leechers:
+                    leechers = lc
+        except Exception:
+            pass
+        return seeds, leechers
     def get_torrents_full(self):
         try:
             ts = self.c.get_torrents()
@@ -514,7 +558,8 @@ class TransmissionClient(BaseClient):
                     sv, av = 1, 1
                 tracker_url = t.trackers[0].announce if t.trackers else ""
                 tracker_domain = _safe_tracker_domain(tracker_url)
-                res.append({"hash": t.hashString, "name": t.name, "size": t.total_size, "done": t.downloaded_ever, "up_total": t.uploaded_ever, "ratio": t.ratio * 1000, "state": sv, "active": av, "hashing": hv, "message": t.error_string, "down_rate": t.rate_download, "up_rate": t.rate_upload, "tracker_domain": tracker_domain, "eta": int(getattr(t, "eta", -1)), "seeds_connected": t.peersSendingToUs, "seeds_total": t.seeders, "leechers_connected": t.peersGettingFromUs, "leechers_total": t.leechers, "availability": None, "save_path": getattr(t, "download_dir", None)})
+                seeds_total, leechers_total = self._swarm_counts(t)
+                res.append({"hash": t.hashString, "name": t.name, "size": t.total_size, "done": t.downloaded_ever, "up_total": t.uploaded_ever, "ratio": t.ratio * 1000, "state": sv, "active": av, "hashing": hv, "message": t.error_string, "down_rate": t.rate_download, "up_rate": t.rate_upload, "tracker_domain": tracker_domain, "eta": int(getattr(t, "eta", -1) or -1), "seeds_connected": getattr(t, "peers_sending_to_us", 0), "seeds_total": seeds_total, "leechers_connected": getattr(t, "peers_getting_from_us", 0), "leechers_total": leechers_total, "availability": None, "save_path": getattr(t, "download_dir", None)})
             return res
         except Exception as e:
             print(f"Transmission error: {e}")
@@ -525,8 +570,9 @@ class TransmissionClient(BaseClient):
     def remove_torrent_with_data(self, h): self.c.remove_torrent(h, delete_data=True)
     def add_torrent_url(self, u, sp=None): self.c.add_torrent(u, download_dir=sp)
     def add_torrent_file(self, c, sp=None, p=None):
-        import base64
-        self.c.add_torrent(base64.b64encode(c).decode('utf-8'), download_dir=sp)
+        # Pass raw .torrent bytes; transmission_rpc base64-encodes them into metainfo.
+        # (Passing a base64 *string* makes v4 treat it as a filename and silently fail.)
+        self.c.add_torrent(c, download_dir=sp)
     def recheck_torrent(self, h): self.c.verify_torrent(h)
     def reannounce_torrent(self, h): self.c.reannounce_torrent(h)
     def get_global_stats(self):
@@ -719,9 +765,7 @@ class LocalClient(BaseClient):
         if u.startswith("magnet:"):
             self.m.add_magnet(u, fp)
         else:
-            r = requests.get(safe_encode_url(u), timeout=30)
-            r.raise_for_status()
-            self.m.add_torrent_file(r.content, fp)
+            self.m.add_torrent_file(download_torrent_url(u), fp)
     def add_torrent_file(self, c, sp=None, pr=None): self.m.add_torrent_file(c, sp or self._edp(), pr)
     def get_global_stats(self):
         st = self.m.get_status()

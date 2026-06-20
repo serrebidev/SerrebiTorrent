@@ -8,6 +8,7 @@ Goals:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import threading
@@ -22,9 +23,28 @@ def _read_json(path: str) -> Dict[str, Any]:
 
 
 def _write_json(path: str, data: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+    """Atomically write JSON: serialize to a temp file, fsync, then os.replace.
+
+    A direct ``open(path, "w")`` truncates the real file immediately, so a crash
+    or power loss mid-write leaves config.json empty and the user loses every
+    profile/preference. Writing to a sibling temp and atomically renaming keeps
+    the previous good file intact on any failure.
+    """
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 CONFIG_FILE = get_config_path()
@@ -163,7 +183,7 @@ class ConfigManager:
     def get_profiles(self) -> Dict[str, Any]:
         with self.lock:
             profiles = self.config.get("profiles", {})
-            return profiles if isinstance(profiles, dict) else {}
+            return copy.deepcopy(profiles) if isinstance(profiles, dict) else {}
 
     def add_profile(self, name: str, client_type: str, url: str, user: str, password: str) -> str:
         import uuid

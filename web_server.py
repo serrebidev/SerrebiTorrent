@@ -1,6 +1,9 @@
 import os
 import threading
 import sys
+import hmac
+import time
+import tempfile
 from flask import Flask, request, jsonify, send_from_directory, session, redirect
 from werkzeug.utils import secure_filename
 
@@ -9,7 +12,113 @@ def get_bundle_dir():
 
 static_dir = os.path.join(get_bundle_dir(), 'web_static')
 app = Flask(__name__, static_folder=static_dir)
-app.secret_key = os.urandom(24)
+
+
+def _load_or_create_secret_key():
+    """Persist the Flask secret key so sessions survive restarts.
+
+    Regenerating os.urandom() every launch silently invalidates all sessions on
+    restart. Store the key under the app data dir (best-effort)."""
+    try:
+        from app_paths import get_data_dir
+        key_path = os.path.join(get_data_dir(), 'web_secret.key')
+        if os.path.exists(key_path):
+            with open(key_path, 'rb') as f:
+                data = f.read()
+            if len(data) >= 16:
+                return data
+        key = os.urandom(32)
+        try:
+            with open(key_path, 'wb') as f:
+                f.write(key)
+        except OSError:
+            pass
+        return key
+    except Exception:
+        return os.urandom(32)
+
+
+app.secret_key = _load_or_create_secret_key()
+# Harden the session cookie and cap request bodies.
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',  # blocks cross-site POST -> mitigates CSRF
+    PERMANENT_SESSION_LIFETIME=43200,  # 12h idle session lifetime
+    MAX_CONTENT_LENGTH=64 * 1024 * 1024,  # 64 MB cap on request bodies
+)
+
+# --- Login brute-force throttling (per client IP) ---
+_AUTH_FAIL_LIMIT = 8
+_AUTH_LOCK_SECONDS = 300
+_auth_lock = threading.Lock()
+_auth_failures = {}  # ip -> (fail_count, window_start_ts)
+
+
+def _client_ip():
+    return request.remote_addr or 'unknown'
+
+
+def _is_locked_out(ip):
+    with _auth_lock:
+        rec = _auth_failures.get(ip)
+        if not rec:
+            return False
+        count, first = rec
+        if count < _AUTH_FAIL_LIMIT:
+            return False
+        if time.time() - first < _AUTH_LOCK_SECONDS:
+            return True
+        _auth_failures.pop(ip, None)  # lock window expired
+        return False
+
+
+def _record_auth_failure(ip):
+    with _auth_lock:
+        count, first = _auth_failures.get(ip, (0, time.time()))
+        if time.time() - first >= _AUTH_LOCK_SECONDS:
+            count, first = 0, time.time()
+        _auth_failures[ip] = (count + 1, first)
+
+
+def _clear_auth_failures(ip):
+    with _auth_lock:
+        _auth_failures.pop(ip, None)
+
+
+def _weak_web_credentials():
+    """True when the Web UI password is still the default/empty (unsafe to expose)."""
+    pw = WEB_CONFIG.get('password') or ''
+    return pw == '' or pw == 'password'
+
+
+def _allowed_add_url(u):
+    """Allow only network/magnet torrent sources; block file://, UNC, SSRF schemes."""
+    return u.lower().startswith(('http://', 'https://', 'magnet:'))
+
+
+def _csrf_token():
+    token = session.get('csrf_token')
+    if not token:
+        token = os.urandom(16).hex()
+        session['csrf_token'] = token
+    return token
+
+
+@app.before_request
+def protect_mutating_requests():
+    if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        return None
+    if not request.path.startswith('/api/'):
+        return None
+    if request.endpoint == 'api_login':
+        return None
+    if not session.get('logged_in'):
+        return None
+    expected = session.get('csrf_token')
+    supplied = request.headers.get('X-CSRF-Token') or request.form.get('_csrf')
+    if not expected or not supplied or not hmac.compare_digest(str(supplied), str(expected)):
+        return "CSRF token missing or invalid.", 403
+    return None
 
 # Global context to hold reference to the active torrent client and credentials
 # These are updated by the MainFrame when the Web UI is enabled or settings change.
@@ -44,20 +153,40 @@ def login_page():
 
 @app.route('/<path:filename>')
 def serve_static(filename):
+    # login.html is the only public page; everything else (app.js, index.html,
+    # style.css) is part of the authenticated app shell.
+    if filename != 'login.html' and not session.get('logged_in'):
+        return redirect('/login.html')
     return send_from_directory(static_dir, filename)
 
 @app.route('/api/v2/auth/login', methods=['POST'])
 def api_login():
-    user = request.form.get('username')
-    pw = request.form.get('password')
-    if user == WEB_CONFIG['username'] and pw == WEB_CONFIG['password']:
+    ip = _client_ip()
+    if _is_locked_out(ip):
+        return "Too many failed attempts. Try again later.", 429
+    user = (request.form.get('username') or '').encode('utf-8')
+    pw = (request.form.get('password') or '').encode('utf-8')
+    exp_user = (WEB_CONFIG.get('username') or '').encode('utf-8')
+    exp_pw = (WEB_CONFIG.get('password') or '').encode('utf-8')
+    # Constant-time comparison avoids a timing side-channel on the password.
+    if hmac.compare_digest(user, exp_user) and hmac.compare_digest(pw, exp_pw):
         session['logged_in'] = True
+        session['csrf_token'] = os.urandom(16).hex()
+        session.permanent = True
+        _clear_auth_failures(ip)
         return "Ok."
+    _record_auth_failure(ip)
     return "Fails.", 403
+
+@app.route('/api/v2/auth/csrf')
+@login_required
+def api_csrf():
+    return jsonify({'csrf_token': _csrf_token()})
 
 @app.route('/api/v2/auth/logout', methods=['POST'])
 def api_logout():
     session.pop('logged_in', None)
+    session.pop('csrf_token', None)
     return "Ok."
 
 @app.route('/api/v2/profiles')
@@ -160,7 +289,8 @@ def torrents_all():
         try:
             return jsonify(client.get_torrents_full())
         except Exception as e:
-            return str(e), 500
+            print(f"torrents/all error: {e}")
+            return "Failed to fetch torrents.", 500
     return jsonify([])
 
 @app.route('/api/v2/torrents/files')
@@ -265,12 +395,17 @@ def torrents_add():
         for url in urls.split('\n'):
             u = url.strip()
             if u:
+                if not _allowed_add_url(u):
+                    errors.append("rejected-scheme")
+                    print(f"Web add: rejected non-http/magnet URL: {u[:80]!r}")
+                    continue
                 try:
                     attempted += 1
                     client.add_torrent_url(u, sp=save_path)
                 except Exception as e:
-                    errors.append(f"URL {u}: {e}")
-    
+                    errors.append("url-failed")
+                    print(f"Web add URL error for {u[:80]!r}: {e}")
+
     if 'torrents' in request.files:
         files = request.files.getlist('torrents')
         for f in files:
@@ -280,12 +415,14 @@ def torrents_add():
                     attempted += 1
                     client.add_torrent_file(content, sp=save_path)
                 except Exception as e:
-                    errors.append(f"File {f.filename}: {e}")
-                
-    if attempted == 0:
+                    errors.append("file-failed")
+                    print(f"Web add file error for {f.filename!r}: {e}")
+
+    if attempted == 0 and not errors:
         return "No torrents provided", 400
     if errors:
-        return "Failed to add torrents: " + "; ".join(errors), 500
+        # Detail is logged server-side; don't leak exception text to clients.
+        return "Failed to add torrents.", 500
     return "Ok."
 
 @app.route('/api/v2/rss/feeds')
@@ -370,8 +507,8 @@ def rss_import_flexget():
     
     f = request.files['config']
     # Save to temp and import
-    filename = secure_filename(f.filename)
-    temp_path = os.path.join(os.environ.get('TEMP', '.'), filename)
+    filename = secure_filename(f.filename or '') or 'flexget.yml'
+    temp_path = os.path.join(tempfile.gettempdir(), f"serrebitorrent_{os.getpid()}_{filename}")
     f.save(temp_path)
     
     import wx
@@ -445,7 +582,8 @@ def set_remote_prefs():
             client.set_app_preferences(new_prefs)
             return "Ok."
         except Exception as e:
-            return str(e), 500
+            print(f"remote_prefs error: {e}")
+            return "Failed to update remote preferences.", 500
     return "No data", 400
 
 @app.route('/api/v2/sync/maindata')
@@ -473,6 +611,9 @@ def run_server():
 def start_web_ui():
     global server_thread
     if server_thread and server_thread.is_alive():
+        return
+    if _weak_web_credentials():
+        print("Web UI not started: change the default Web UI password first.")
         return
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()

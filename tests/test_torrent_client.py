@@ -158,16 +158,16 @@ def session_manager_instance(mock_session_env):
 class TestSessionManagerAddTorrent:
     """Test adding torrents via various methods."""
     
-    def test_add_torrent_file_success(self, session_manager_instance, mock_session_env):
+    def test_add_torrent_file_success(self, session_manager_instance, mock_session_env, tmp_path):
         """Test adding a torrent from file content."""
         mock_info = MagicMock()
         mock_info.info_hash.return_value = "a" * 40
         mock_info.info_hashes.return_value = MagicMock()
         mock_session_env.torrent_info.return_value = mock_info
+        session_manager_instance.state_dir = str(tmp_path)
         
         with patch.object(session_manager_instance, '_find_handle', return_value=None):
-            with patch('builtins.open', MagicMock()):
-                session_manager_instance.add_torrent_file(b"torrent_content", "/downloads")
+            session_manager_instance.add_torrent_file(b"torrent_content", "/downloads")
         
         session_manager_instance.ses.add_torrent.assert_called_once()
     
@@ -290,13 +290,13 @@ class TestSessionManagerState:
 class TestLocalClientUrlEncoding:
     """Test LocalClient URL encoding - these don't require mocking SessionManager."""
     
-    def test_safe_encode_url_used_in_add_torrent_url(self):
-        """Verify that safe_encode_url is used in the LocalClient code."""
+    def test_safe_downloader_used_in_add_torrent_url(self):
+        """Verify that LocalClient uses the capped HTTP(S) downloader."""
         # Read the source code and verify
         import inspect
         from clients import LocalClient
         source = inspect.getsource(LocalClient.add_torrent_url)
-        assert "safe_encode_url" in source
+        assert "download_torrent_url" in source
     
     def test_url_encoding_function_exists(self):
         """Test that safe_encode_url is exported from clients."""
@@ -308,6 +308,34 @@ class TestLocalClientUrlEncoding:
         encoded = safe_encode_url(url)
         assert "%5B" in encoded
         assert "%5D" in encoded
+
+    def test_download_torrent_url_rejects_non_http_scheme(self):
+        from clients import download_torrent_url
+        with pytest.raises(ValueError):
+            download_torrent_url("file:///C:/secret.torrent")
+
+    def test_download_torrent_url_enforces_size_cap(self, monkeypatch):
+        import clients
+
+        class FakeResponse:
+            status_code = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield b"a" * (clients.MAX_TORRENT_DOWNLOAD_BYTES + 1)
+
+        monkeypatch.setattr(clients.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+        with pytest.raises(ValueError):
+            clients.download_torrent_url("https://example.com/test.torrent")
 
 
 class TestLocalClientTorrentStatus:

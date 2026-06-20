@@ -18,6 +18,33 @@ def rss_manager():
             manager.save = MagicMock()
             return manager
 
+def test_downloaded_dedup(rss_manager):
+    url = "http://feed.com/rss"
+    rss_manager.add_feed(url)
+    uid = "http://test.com/a.torrent"
+
+    # Unknown uid is not yet downloaded
+    assert rss_manager.is_downloaded(url, uid) is False
+    # After marking, it is remembered (so the next poll skips it)
+    rss_manager.mark_downloaded(url, uid)
+    assert rss_manager.is_downloaded(url, uid) is True
+    # Empty/None uids are ignored, not crashed on
+    assert rss_manager.is_downloaded(url, "") is False
+    rss_manager.mark_downloaded(url, None)
+    # Unknown feed never reports downloaded
+    assert rss_manager.is_downloaded("http://other/rss", uid) is False
+
+def test_downloaded_list_is_bounded(rss_manager):
+    url = "http://feed.com/rss"
+    rss_manager.add_feed(url)
+    for i in range(1200):
+        rss_manager.mark_downloaded(url, f"uid-{i}")
+    seen = rss_manager.feeds[url]['downloaded']
+    assert len(seen) == 1000
+    # Most recent retained, oldest evicted
+    assert "uid-1199" in seen
+    assert "uid-0" not in seen
+
 def test_add_remove_feed(rss_manager):
     assert rss_manager.add_feed("http://test.com/rss", "Test Feed") is True
     assert "http://test.com/rss" in rss_manager.feeds
@@ -74,7 +101,9 @@ def test_fetch_feed(mock_get, rss_manager):
     """
     mock_get.return_value.status_code = 200
     mock_get.return_value.content = rss_content.encode('utf-8')
-    
+    # fetch_feed streams the body with a size cap, so feed iter_content the bytes.
+    mock_get.return_value.iter_content = lambda chunk_size=8192: iter([rss_content.encode('utf-8')])
+
     rss_manager.add_feed("http://feed.com")
     articles = rss_manager.fetch_feed("http://feed.com")
     
@@ -84,3 +113,7 @@ def test_fetch_feed(mock_get, rss_manager):
     
     # Check if feed updated
     assert len(rss_manager.feeds["http://feed.com"]['articles']) == 1
+
+
+def test_fetch_feed_rejects_non_http_scheme(rss_manager):
+    assert rss_manager.fetch_feed("file:///C:/secret.xml") == []

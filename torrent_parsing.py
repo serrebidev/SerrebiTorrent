@@ -22,14 +22,14 @@ _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 _BASE32_RE = re.compile(r"^[A-Z2-7]+=*$", re.IGNORECASE)
 
 
-def _normalize_hex(value: str) -> Optional[str]:
+def _normalize_hex(value: str, lengths=(40, 64)) -> Optional[str]:
     val = value.strip()
-    if len(val) in (40, 64) and _HEX_RE.match(val):
+    if len(val) in lengths and _HEX_RE.match(val):
         return val.lower()
     return None
 
 
-def _normalize_base32(value: str) -> Optional[str]:
+def _normalize_base32(value: str, raw_lengths=(20, 32)) -> Optional[str]:
     val = value.strip().upper()
     if not val or not _BASE32_RE.match(val):
         return None
@@ -38,7 +38,7 @@ def _normalize_base32(value: str) -> Optional[str]:
         raw = base64.b32decode(val + padding, casefold=True)
     except (binascii.Error, ValueError):
         return None
-    if len(raw) not in (20, 32):
+    if len(raw) not in raw_lengths:
         return None
     return binascii.hexlify(raw).decode("ascii")
 
@@ -49,8 +49,6 @@ def _normalize_btmh(value: str) -> Optional[str]:
         val = val[len("urn:btmh:") :]
     if len(val) == 68 and val.startswith("1220") and _HEX_RE.match(val):
         return val[4:]
-    if len(val) == 64 and _HEX_RE.match(val):
-        return val
     return None
 
 
@@ -71,7 +69,7 @@ def normalize_info_hash(value) -> Optional[str]:
     lower = val.lower()
     if lower.startswith("urn:btih:"):
         payload = val[len("urn:btih:") :]
-        return _normalize_hex(payload) or _normalize_base32(payload)
+        return _normalize_hex(payload, (40,)) or _normalize_base32(payload, (20,))
     if lower.startswith("urn:btmh:"):
         return _normalize_btmh(val)
     return _normalize_btmh(val) or _normalize_hex(val)

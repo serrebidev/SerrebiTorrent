@@ -9,6 +9,7 @@ import subprocess
 import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -23,6 +24,12 @@ API_TIMEOUT = 15
 DOWNLOAD_TIMEOUT = 60
 
 _SEMVER_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
+_STRICT_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+_ALLOWED_DOWNLOAD_HOSTS = {
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+}
 
 
 def _normalize_thumbprint(value: Optional[str]) -> str:
@@ -54,7 +61,11 @@ def _extract_manifest_thumbprints(manifest: Dict[str, Any]) -> Tuple[str, ...]:
 
 
 def get_allowed_thumbprints(manifest: Dict[str, Any]) -> Tuple[str, ...]:
-    return _normalize_thumbprints(list(_extract_manifest_thumbprints(manifest)) + list(_env_thumbprints()))
+    if os.environ.get("SERREBITORRENT_TRUST_MANIFEST_THUMBPRINTS") == "1":
+        manifest_values = list(_extract_manifest_thumbprints(manifest))
+    else:
+        manifest_values = []
+    return _normalize_thumbprints(manifest_values + list(_env_thumbprints()))
 
 
 class UpdateError(Exception):
@@ -76,7 +87,7 @@ class UpdateInfo:
 def parse_semver(text: str) -> Optional[Tuple[int, int, int]]:
     if not text:
         return None
-    match = _SEMVER_RE.search(text.strip())
+    match = _STRICT_SEMVER_RE.match(text.strip())
     if not match:
         return None
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
@@ -92,6 +103,13 @@ def is_newer_version(current: Tuple[int, int, int], latest: Tuple[int, int, int]
 
 def _is_sha256(value: str) -> bool:
     return bool(value) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def _validate_download_url(url: str) -> None:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() != "https" or host not in _ALLOWED_DOWNLOAD_HOSTS:
+        raise UpdateError("Update download URL must be an HTTPS GitHub release asset.")
 
 
 def _rate_limit_message(headers: Mapping[str, str]) -> str:
@@ -136,6 +154,7 @@ def download_manifest(release: Dict[str, Any]) -> Dict[str, Any]:
     url = asset.get("browser_download_url")
     if not url:
         raise UpdateError("Update manifest asset is missing a download URL.")
+    _validate_download_url(str(url))
     try:
         response = requests.get(url, timeout=API_TIMEOUT)
     except requests.RequestException as exc:
@@ -162,13 +181,17 @@ def validate_manifest(manifest: Dict[str, Any], release: Dict[str, Any]) -> Dict
     if manifest_version and release_version and manifest_version != release_version:
         raise UpdateError("Update manifest version does not match the latest release tag.")
 
-    if not manifest.get("download_url"):
-        asset = _find_asset(release, str(manifest.get("asset_filename", "")))
-        if asset and asset.get("browser_download_url"):
-            manifest["download_url"] = asset["browser_download_url"]
+    asset = _find_asset(release, str(manifest.get("asset_filename", "")))
+    if not asset or not asset.get("browser_download_url"):
+        raise UpdateError("Update asset not found in the latest release.")
+    asset_url = str(asset["browser_download_url"])
+    _validate_download_url(asset_url)
 
     if not manifest.get("download_url"):
-        raise UpdateError("Update manifest does not include a download URL.")
+        manifest["download_url"] = asset_url
+    elif str(manifest.get("download_url")) != asset_url:
+        raise UpdateError("Update manifest download URL does not match the release asset.")
+    _validate_download_url(str(manifest["download_url"]))
 
     return manifest
 
@@ -196,6 +219,7 @@ def check_for_update() -> Optional[UpdateInfo]:
 
 
 def download_file(url: str, dest_path: str) -> None:
+    _validate_download_url(url)
     try:
         with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
             if response.status_code != 200:
@@ -217,18 +241,29 @@ def compute_sha256(path: str) -> str:
 
 
 def extract_zip(zip_path: str, dest_dir: str) -> None:
+    dest_abs = os.path.abspath(dest_dir)
     with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(dest_dir)
+        for member in zf.infolist():
+            target = os.path.abspath(os.path.join(dest_abs, member.filename))
+            if target != dest_abs and not target.startswith(dest_abs + os.sep):
+                raise UpdateError(f"Unsafe path in update archive: {member.filename}")
+        zf.extractall(dest_abs)
 
 
 def find_app_dir(staging_dir: str, exe_name: str = APP_EXE_NAME) -> Optional[str]:
     candidate = os.path.join(staging_dir, "SerrebiTorrent", exe_name)
     if os.path.isfile(candidate):
         return os.path.dirname(candidate)
-    for root, _dirs, files in os.walk(staging_dir):
+    matches = []
+    for root, dirs, files in os.walk(staging_dir):
+        dirs.sort()
+        files.sort()
         if exe_name in files:
-            return root
-    return None
+            matches.append(root)
+    if not matches:
+        return None
+    matches.sort(key=lambda p: (0 if os.path.basename(p).lower() == "serrebitorrent" else 1, len(p), p.lower()))
+    return matches[0]
 
 
 def verify_authenticode(exe_path: str, allowed_thumbprints: Iterable[str]) -> None:
@@ -243,8 +278,17 @@ def verify_authenticode(exe_path: str, allowed_thumbprints: Iterable[str]) -> No
     module_path = ";".join(module_paths)
     # Escape single quotes in path for PowerShell
     escaped_path = exe_path.replace("'", "''")
+    powershell_exe = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+    )
+    if not os.path.isfile(powershell_exe):
+        powershell_exe = "powershell.exe"
     cmd = [
-        "powershell",
+        powershell_exe,
         "-NoProfile",
         "-Command",
         (
@@ -264,7 +308,7 @@ def verify_authenticode(exe_path: str, allowed_thumbprints: Iterable[str]) -> No
     status_msg = str(data.get("StatusMessage", "")).strip()
     thumbprint = _normalize_thumbprint(data.get("Thumbprint"))
     if status.lower() != "valid":
-        if thumbprint and thumbprint in allowed:
+        if status.lower() == "unknownerror" and thumbprint and thumbprint in allowed:
             return
         msg = status_msg or "Unknown signature status."
         detail = f"Authenticode signature is not valid: {msg}".strip()

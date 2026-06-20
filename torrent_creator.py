@@ -1,10 +1,12 @@
 import os
+import stat
 from urllib.parse import quote
 from typing import List, Optional, Tuple
 
 import wx
 
 from libtorrent_env import prepare_libtorrent_dlls
+from torrent_parsing import build_magnet_from_hashes
 
 prepare_libtorrent_dlls()
 
@@ -40,6 +42,37 @@ def _torrent_info_hash(info) -> str:
         return str(info.info_hash())
     except Exception:
         return ""
+
+
+def _torrent_info_hashes(info) -> dict:
+    hashes = {}
+    try:
+        if hasattr(info, "info_hashes"):
+            ihs = info.info_hashes()
+            if ihs.has_v1():
+                hashes["v1"] = str(ihs.v1)
+            if ihs.has_v2():
+                hashes["v2"] = str(ihs.v2)
+    except Exception:
+        pass
+    if not hashes:
+        h = _torrent_info_hash(info)
+        if h:
+            hashes["v1" if len(h) == 40 else "v2"] = h
+    return hashes
+
+
+def _include_torrent_path(path: str) -> bool:
+    """Exclude symlinks/junctions/reparse points from torrent creation."""
+    try:
+        if os.path.islink(path):
+            return False
+        st = os.stat(path, follow_symlinks=False)
+        attrs = getattr(st, "st_file_attributes", 0)
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        return not bool(attrs & reparse)
+    except OSError:
+        return False
 
 
 PIECE_SIZE_CHOICES = [
@@ -92,11 +125,19 @@ def create_torrent_bytes(
 
     if not os.path.exists(source_path):
         raise FileNotFoundError(source_path)
+    if not _include_torrent_path(source_path):
+        raise ValueError("Source path must not be a symlink or Windows reparse point.")
 
     fs = lt.file_storage()
 
-    # add_files can take a directory or a file; it will recurse for directories.
-    lt.add_files(fs, source_path)
+    # add_files can take a directory or a file; predicate prevents symlink/junction
+    # traversal into arbitrary external content.
+    lt.add_files(fs, source_path, _include_torrent_path)
+    try:
+        if fs.num_files() == 0:
+            raise ValueError("No regular files found to include in torrent.")
+    except AttributeError:
+        pass
 
     # create_torrent signature differs a bit between lt versions; try safest calls.
     if piece_size and piece_size > 0:
@@ -169,31 +210,38 @@ def create_torrent_bytes(
 
     # Add "source" inside info dict for trackers that expect it.
     if source:
+        info = None
         try:
-            info = e["info"]
-            info["source"] = source
+            info = e.get("info")
         except Exception:
+            pass
+        if info is None:
             try:
-                e["info"]["source"] = source
+                info = e.get(b"info")
             except Exception:
                 pass
+        if isinstance(info, dict):
+            key = b"source" if any(isinstance(k, bytes) for k in info.keys()) else "source"
+            info[key] = source.encode("utf-8") if isinstance(key, bytes) else source
 
     torrent_bytes = lt.bencode(e)
 
     info_hash = ""
+    hashes = {}
     try:
         ti = lt.torrent_info(torrent_bytes)
-        info_hash = _torrent_info_hash(ti)
+        hashes = _torrent_info_hashes(ti)
+        info_hash = hashes.get("v1") or hashes.get("v2") or ""
     except Exception:
         # Fallback: may not be available on some versions
         info_hash = ""
 
-    magnet = ""
-    try:
-        if hasattr(lt, "make_magnet_uri"):
-            magnet = lt.make_magnet_uri(ti)
-    except Exception:
-        magnet = ""
+    magnet = build_magnet_from_hashes(
+        hashes.get("v1"),
+        hashes.get("v2"),
+        display_name=ti.name() if 'ti' in locals() else None,
+        trackers=trackers,
+    )
     if not magnet and info_hash:
         magnet = f"magnet:?xt=urn:btih:{info_hash}"
         for tr in trackers or []:

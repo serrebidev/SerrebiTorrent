@@ -18,9 +18,9 @@ from app_paths import get_state_dir
 from config_manager import ConfigManager
 from torrent_parsing import normalize_info_hash
 
-QBITTORRENT_REPORTED_VERSION = "5.2.0"
+QBITTORRENT_REPORTED_VERSION = "5.2.2"
 QBITTORRENT_USER_AGENT = f"qBittorrent/{QBITTORRENT_REPORTED_VERSION}"
-QBITTORRENT_PEER_FINGERPRINT = b"-qB5200-"
+QBITTORRENT_PEER_FINGERPRINT = b"-qB5220-"
 
 
 def _unlimited_if_negative(value, default=0):
@@ -96,11 +96,22 @@ class SessionManager:
         return {}
 
     def _save_torrents_db(self):
+        tmp = f"{self.torrents_db_path}.{os.getpid()}.tmp"
         try:
-            with open(self.torrents_db_path, 'w', encoding='utf-8') as f:
+            os.makedirs(os.path.dirname(self.torrents_db_path), exist_ok=True)
+            with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(self.torrents_db, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.torrents_db_path)
         except Exception as e:
             print(f"Error saving torrents.json: {e}")
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     def _hash_object_key(self, value):
         if value is None:
@@ -280,16 +291,20 @@ class SessionManager:
             'proxy_password': prefs.get('proxy_password', '')
         }
         
-        self.ses.apply_settings(settings)
-
         # IP reported to trackers (announce &ip=). Useful when inbound peer traffic
         # is forwarded from a public relay/VPS whose address differs from the local
-        # egress IP. Applied separately and guarded because the setting was deprecated
-        # in some libtorrent builds; a failure here must not drop the core settings.
+        # egress IP. Guarded because the setting was deprecated in some libtorrent
+        # builds; a failure here must not drop the core settings.
         announce_ip = str(prefs.get('announce_ip', '') or '').strip()
+        if 'announce_ip' in prefs:
+            settings['announce_ip'] = announce_ip
         try:
-            self.ses.apply_settings({'announce_ip': announce_ip})
+            self.ses.apply_settings(settings)
         except Exception as e:
+            if 'announce_ip' not in settings:
+                raise
+            settings.pop('announce_ip', None)
+            self.ses.apply_settings(settings)
             if announce_ip:
                 print(f"announce_ip not supported by this libtorrent build: {e}")
 
@@ -305,16 +320,24 @@ class SessionManager:
                         if isinstance(alert, lt.save_resume_data_alert):
                             self._handle_save_resume(alert)
                         elif isinstance(alert, lt.save_resume_data_failed_alert):
-                            ih = self._info_hash_key(alert.params.info_hashes)
-                            if ih:
-                                self.pending_saves.discard(ih)
+                            self._handle_save_resume_failed(alert)
                         elif isinstance(alert, lt.metadata_received_alert):
                             # ... handle metadata ...
                             pass
-            except Exception:
-                # Suppress session-level RTTI/Access violations
+            except Exception as e:
+                print(f"Session alert loop error: {e}")
                 time.sleep(1)
                 continue
+
+    def _handle_save_resume_failed(self, alert):
+        try:
+            params = getattr(alert, 'params', None)
+            info_hashes = getattr(params, 'info_hashes', None)
+            ih = self._info_hash_key(info_hashes)
+            if ih:
+                self.pending_saves.discard(ih)
+        except Exception as e:
+            print(f"Error handling save_resume_data_failed_alert: {e}")
 
     def _handle_save_resume(self, alert):
         # alert.params is add_torrent_params
@@ -365,24 +388,36 @@ class SessionManager:
         if not ih:
             ih = self._info_hash_key(info.info_hash())
         
-        # Check if already exists
-        duplicate_keys = list(hashes.values()) or [ih]
-        if any(self._find_handle(key) for key in duplicate_keys):
-            raise ValueError(f"Torrent with hash {ih} already exists.")
-
-        # Save .torrent file for restoration
-        tpath = os.path.join(self.state_dir, ih + '.torrent')
-        with open(tpath, 'wb') as f:
-            f.write(file_content)
-            
         params = {'ti': info, 'save_path': save_path}
         if file_priorities:
             params['file_priorities'] = file_priorities
-            
-        self.ses.add_torrent(params)
-        
-        if ih:
-            with self.lock:
+
+        with self.lock:
+            duplicate_keys = list(hashes.values()) or [ih]
+            if any(self._find_handle(key) for key in duplicate_keys):
+                raise ValueError(f"Torrent with hash {ih} already exists.")
+
+            tpath = os.path.join(self.state_dir, ih + '.torrent')
+            tmp = f"{tpath}.{os.getpid()}.tmp"
+            try:
+                with open(tmp, 'wb') as f:
+                    f.write(file_content)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except (OSError, TypeError, ValueError):
+                        pass
+                os.replace(tmp, tpath)
+            finally:
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
+
+            self.ses.add_torrent(params)
+
+            if ih:
                 entry = {'save_path': save_path, 'added': time.time()}
                 if hashes:
                     entry['hashes'] = hashes
@@ -410,17 +445,14 @@ class SessionManager:
         # Check if already exists from magnet's hash
         hashes = self._info_hash_dict(params.info_hashes)
         ih = hashes.get("v1") or hashes.get("v2") or self._info_hash_key(params.info_hashes)
-        if any(self._find_handle(key) for key in (list(hashes.values()) or [ih])):
-            raise ValueError(f"Magnet with hash {ih} already exists.")
-        
-        # We should also save the magnet URI itself for robust restoration if metadata is not fetched quickly
-        # Or let resume data handle it.
-        # For now, just adding it directly to session.
-        self.ses.add_torrent(params)
+        with self.lock:
+            if any(self._find_handle(key) for key in (list(hashes.values()) or [ih])):
+                raise ValueError(f"Magnet with hash {ih} already exists.")
 
-        if ih:
-             with self.lock:
-                 entry = {'save_path': save_path, 'added': time.time()}
+            self.ses.add_torrent(params)
+
+            if ih:
+                 entry = {'save_path': save_path, 'added': time.time(), 'magnet_uri': url}
                  if hashes:
                      entry['hashes'] = hashes
                  self.torrents_db[ih] = entry
@@ -538,19 +570,55 @@ class SessionManager:
                         except Exception as e:
                             print(f"Error loading torrent file {f}: {e}")
 
+        # 3. Reload magnets whose metadata/resume data was not available before exit.
+        with self.lock:
+            magnet_entries = list(self.torrents_db.items())
+        for db_key, entry in magnet_entries:
+            if not isinstance(entry, dict):
+                continue
+            magnet_uri = entry.get('magnet_uri')
+            if not magnet_uri:
+                continue
+            keys = [db_key]
+            stored_hashes = entry.get('hashes')
+            if isinstance(stored_hashes, dict):
+                keys.extend(self._hash_object_key(value) for value in stored_hashes.values())
+            if any(key in loaded_hashes for key in keys if key):
+                continue
+            try:
+                params = lt.parse_magnet_uri(magnet_uri)
+                params.save_path = entry.get('save_path') or default_save_path
+                self.ses.add_torrent(params)
+                loaded_hashes.update(key for key in keys if key)
+                print(f"Loaded magnet {db_key} from tracked URI.")
+            except Exception as e:
+                print(f"Error loading magnet {db_key}: {e}")
+
     def save_state(self):
         print("Saving session state...")
         # Trigger save_resume_data for all torrents
         handles = self.ses.get_torrents()
-        self.pending_saves.clear()
+        with self.lock:
+            self.pending_saves.clear()
         
         count = 0
         for h in handles:
             if h.is_valid():
                 ih = self._handle_hash_key(h)
+                has_metadata = getattr(h, 'has_metadata', None)
+                if callable(has_metadata) and not has_metadata():
+                    continue
+                need_resume = getattr(h, 'need_save_resume_data', None)
+                if callable(need_resume) and not need_resume():
+                    continue
+                try:
+                    h.save_resume_data(lt.resume_data_flags_t.flush_disk_cache)
+                except Exception as e:
+                    print(f"Error requesting resume data for {ih}: {e}")
+                    continue
                 if ih:
-                    self.pending_saves.add(ih)
-                h.save_resume_data(lt.resume_data_flags_t.flush_disk_cache)
+                    with self.lock:
+                        self.pending_saves.add(ih)
                 count += 1
         
         if count == 0:
@@ -567,9 +635,7 @@ class SessionManager:
                         if isinstance(alert, lt.save_resume_data_alert):
                             self._handle_save_resume(alert)
                         elif isinstance(alert, lt.save_resume_data_failed_alert):
-                            ih = self._info_hash_key(alert.params.info_hashes)
-                            if ih:
-                                self.pending_saves.discard(ih)
+                            self._handle_save_resume_failed(alert)
             except Exception as e:
                 print(f"Error processing alerts during save: {e}")
                 time.sleep(0.1)
@@ -581,6 +647,20 @@ class SessionManager:
         
         with self.lock:
             self._save_torrents_db()
+
+    def shutdown(self):
+        """Stop alert processing and persist resume data before process exit."""
+        if not self.running:
+            self.save_state()
+            return
+        self.running = False
+        if self.alert_thread.is_alive():
+            self.alert_thread.join(timeout=2)
+        try:
+            self.ses.pause()
+        except Exception as e:
+            print(f"Error pausing libtorrent session during shutdown: {e}")
+        self.save_state()
 
     def _find_handle(self, info_hash_str):
         wanted = self._hash_object_key(info_hash_str)

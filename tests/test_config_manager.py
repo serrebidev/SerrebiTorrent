@@ -38,3 +38,20 @@ def test_normalize_prefs_missing_keys(tmp_path, monkeypatch):
     prefs = cm.get_preferences()
     assert prefs.get("download_path") == "C:\\X"
     assert "web_ui_port" in prefs
+
+
+def test_get_profiles_returns_copy(tmp_path, monkeypatch):
+    config_path, _ = _configure_paths(tmp_path, monkeypatch)
+    config_path.write_text(
+        json.dumps({
+            "preferences": {},
+            "profiles": {"p1": {"name": "Original", "type": "local", "url": "C:\\X", "user": "", "password": ""}},
+            "default_profile": "p1",
+        }),
+        encoding="utf-8",
+    )
+    cm = config_manager.ConfigManager()
+    profiles = cm.get_profiles()
+    profiles["p1"]["name"] = "Mutated"
+
+    assert cm.get_profile("p1")["name"] == "Original"

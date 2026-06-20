@@ -27,7 +27,12 @@ def app_client():
     client = web_server.app.test_client()
     with client.session_transaction() as session:
         session["logged_in"] = True
+        session["csrf_token"] = "test-csrf"
     return client
+
+
+def csrf_headers():
+    return {"X-CSRF-Token": "test-csrf"}
 
 
 @pytest.fixture
@@ -43,6 +48,7 @@ def test_torrents_add_calls_client_for_urls(app_client, fake_client):
     res = app_client.post(
         "/api/v2/torrents/add",
         data={"urls": "http://example.com/test.torrent", "savepath": "C:\\Downloads"},
+        headers=csrf_headers(),
     )
     assert res.status_code == 200
     assert fake_client.urls == [("http://example.com/test.torrent", "C:\\Downloads")]
@@ -53,7 +59,12 @@ def test_torrents_add_calls_client_for_files(app_client, fake_client):
         "savepath": "C:\\Downloads",
         "torrents": (io.BytesIO(b"abc"), "test.torrent"),
     }
-    res = app_client.post("/api/v2/torrents/add", data=data, content_type="multipart/form-data")
+    res = app_client.post(
+        "/api/v2/torrents/add",
+        data=data,
+        content_type="multipart/form-data",
+        headers=csrf_headers(),
+    )
     assert res.status_code == 200
     assert fake_client.files == [(b"abc", "C:\\Downloads")]
 
@@ -65,6 +76,7 @@ def test_torrents_add_returns_error_on_failure(app_client):
         res = app_client.post(
             "/api/v2/torrents/add",
             data={"urls": "http://example.com/test.torrent"},
+            headers=csrf_headers(),
         )
         assert res.status_code == 500
         assert b"Failed to add torrents" in res.data
@@ -73,5 +85,14 @@ def test_torrents_add_returns_error_on_failure(app_client):
 
 
 def test_torrents_add_rejects_empty_payload(app_client, fake_client):
-    res = app_client.post("/api/v2/torrents/add", data={"urls": "   "})
+    res = app_client.post("/api/v2/torrents/add", data={"urls": "   "}, headers=csrf_headers())
     assert res.status_code == 400
+
+
+def test_torrents_add_requires_csrf(app_client, fake_client):
+    res = app_client.post(
+        "/api/v2/torrents/add",
+        data={"urls": "http://example.com/test.torrent"},
+    )
+    assert res.status_code == 403
+    assert fake_client.urls == []

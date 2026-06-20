@@ -15,13 +15,31 @@ from updater import (
     UpdateError,
     UpdateInfo,
     check_for_update,
+    get_allowed_thumbprints,
     APP_VERSION
 )
+
+ASSET_URL = "https://github.com/serrebidev/SerrebiTorrent/releases/download/v1.0.0/app.zip"
+
+
+def release_with_asset(tag="v1.0.0", url=ASSET_URL):
+    return {
+        "tag_name": tag,
+        "assets": [
+            {
+                "name": "app.zip",
+                "browser_download_url": url,
+            }
+        ],
+    }
+
 
 def test_parse_semver():
     assert parse_semver("1.0.0") == (1, 0, 0)
     assert parse_semver("v1.2.3") == (1, 2, 3)
     assert parse_semver("2.0") is None
+    assert parse_semver("1.2.3-rc1") is None
+    assert parse_semver("1.2.3.4") is None
     assert parse_semver("") is None
 
 def test_format_version():
@@ -40,11 +58,11 @@ def test_is_sha256():
     assert _is_sha256("z" * 64) is False # Not hex
 
 def test_validate_manifest_success():
-    release = {"tag_name": "v1.0.0"}
+    release = release_with_asset()
     manifest = {
         "version": "1.0.0",
         "asset_filename": "app.zip",
-        "download_url": "http://example.com/app.zip",
+        "download_url": ASSET_URL,
         "sha256": "a" * 64,
         "published_at": "2023-01-01"
     }
@@ -52,7 +70,7 @@ def test_validate_manifest_success():
     assert validated == manifest
 
 def test_validate_manifest_missing_fields():
-    release = {"tag_name": "v1.0.0"}
+    release = release_with_asset()
     manifest = {
         "version": "1.0.0"
     }
@@ -60,25 +78,68 @@ def test_validate_manifest_missing_fields():
         validate_manifest(manifest, release)
 
 def test_validate_manifest_version_mismatch():
-    release = {"tag_name": "v1.0.1"}
+    release = release_with_asset(tag="v1.0.1")
     manifest = {
         "version": "1.0.0",
         "asset_filename": "app.zip",
-        "download_url": "http://example.com/app.zip",
+        "download_url": "https://github.com/serrebidev/SerrebiTorrent/releases/download/v1.0.1/app.zip",
         "sha256": "a" * 64,
         "published_at": "2023-01-01"
     }
     with pytest.raises(UpdateError):
         validate_manifest(manifest, release)
 
+def test_validate_manifest_rejects_non_github_download_url():
+    release = release_with_asset()
+    manifest = {
+        "version": "1.0.0",
+        "asset_filename": "app.zip",
+        "download_url": "https://example.com/app.zip",
+        "sha256": "a" * 64,
+        "published_at": "2023-01-01"
+    }
+    with pytest.raises(UpdateError):
+        validate_manifest(manifest, release)
+
+
+def test_validate_manifest_rejects_release_asset_mismatch():
+    release = release_with_asset()
+    manifest = {
+        "version": "1.0.0",
+        "asset_filename": "app.zip",
+        "download_url": "https://github.com/serrebidev/SerrebiTorrent/releases/download/v1.0.0/other.zip",
+        "sha256": "a" * 64,
+        "published_at": "2023-01-01"
+    }
+    with pytest.raises(UpdateError):
+        validate_manifest(manifest, release)
+
+
+def test_manifest_thumbprints_are_not_trusted_by_default(monkeypatch):
+    manifest = {"signing_thumbprint": "AA BB"}
+    monkeypatch.delenv("SERREBITORRENT_TRUSTED_SIGNING_THUMBPRINTS", raising=False)
+    monkeypatch.delenv("SERREBITORRENT_TRUST_MANIFEST_THUMBPRINTS", raising=False)
+
+    assert get_allowed_thumbprints(manifest) == ()
+
+
+def test_env_thumbprints_are_trusted(monkeypatch):
+    manifest = {"signing_thumbprint": "AA BB"}
+    monkeypatch.setenv("SERREBITORRENT_TRUSTED_SIGNING_THUMBPRINTS", "CC DD")
+    monkeypatch.delenv("SERREBITORRENT_TRUST_MANIFEST_THUMBPRINTS", raising=False)
+
+    assert get_allowed_thumbprints(manifest) == ("CCDD",)
+
+
 @patch('updater.fetch_latest_release')
 @patch('updater.download_manifest')
 def test_check_for_update_available(mock_download, mock_fetch):
-    mock_fetch.return_value = {"tag_name": "v99.99.99"} # Definitely newer
+    url = "https://github.com/serrebidev/SerrebiTorrent/releases/download/v99.99.99/app.zip"
+    mock_fetch.return_value = release_with_asset(tag="v99.99.99", url=url) # Definitely newer
     mock_download.return_value = {
         "version": "99.99.99",
         "asset_filename": "app.zip",
-        "download_url": "http://example.com/app.zip",
+        "download_url": url,
         "sha256": "a" * 64,
         "published_at": "2023-01-01"
     }
@@ -90,6 +151,6 @@ def test_check_for_update_available(mock_download, mock_fetch):
 
 @patch('updater.fetch_latest_release')
 def test_check_for_update_none(mock_fetch):
-    mock_fetch.return_value = {"tag_name": "v0.0.0"} # Very old
+    mock_fetch.return_value = release_with_asset(tag="v0.0.0") # Very old
     update_info = check_for_update()
     assert update_info is None

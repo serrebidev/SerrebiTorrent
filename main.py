@@ -18,7 +18,7 @@ import json
 import requests # Added for downloading torrent files from URL
 import concurrent.futures
 
-from clients import RTorrentClient, QBittorrentClient, TransmissionClient, LocalClient, safe_encode_url
+from clients import RTorrentClient, QBittorrentClient, TransmissionClient, LocalClient, download_torrent_url
 from config_manager import ConfigManager
 from session_manager import SessionManager
 from rss_manager import RSSManager
@@ -215,6 +215,14 @@ def seed_save_path_for_source(source_path):
     base = source_path.rstrip("\\/")
     parent = os.path.dirname(base)
     return parent or source_path
+
+
+def clamp_rss_interval(value):
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return 300
+    return min(86400, max(5, value))
 
 
 try:
@@ -2230,9 +2238,13 @@ class RSSPanel(wx.Panel):
         # Check auto download (scoped to this feed URL)
         matches = self.manager.get_matches(articles, feed_url=url)
         for m in matches:
+            # Skip items already auto-downloaded; otherwise every poll re-adds them.
+            if self.manager.is_downloaded(url, m.get('uid')):
+                continue
             if self.frame.client:
                 try:
                     self.frame.client.add_torrent_url(m['link'])
+                    self.manager.mark_downloaded(url, m.get('uid'))
                     wx.CallAfter(self.frame.statusbar.SetStatusText, f"Auto-added from RSS: {m['title']}", 0)
                 except Exception as e:
                     print(f"Auto-add error: {e}")
@@ -2356,6 +2368,7 @@ class MainFrame(wx.Frame):
         self.torrent_list.Bind(wx.EVT_CONTEXT_MENU, self.on_context_menu)
         self.torrent_list.Bind(wx.EVT_RIGHT_DOWN, self.on_context_menu)
         self.torrent_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_torrent_selected)
+        self.torrent_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.on_torrent_selected)
         
         # Details Panel
         self.details_panel = TorrentDetailsPanel(self.right_splitter, self)
@@ -2383,7 +2396,7 @@ class MainFrame(wx.Frame):
         self._update_web_ui()
 
         # Start RSS Timer
-        rss_interval = self.config_manager.get_preferences().get('rss_update_interval', 300)
+        rss_interval = clamp_rss_interval(self.config_manager.get_preferences().get('rss_update_interval', 300))
         self.rss_timer.Start(rss_interval * 1000)
 
         # Attempt auto-connect
@@ -2904,7 +2917,7 @@ class MainFrame(wx.Frame):
             self._schedule_auto_update_check()
             
             # Update RSS timer interval
-            interval = prefs.get('rss_update_interval', 300)
+            interval = clamp_rss_interval(prefs.get('rss_update_interval', 300))
             self.rss_timer.Start(interval * 1000)
             
             # Refresh RSS view in case of reset
@@ -2931,55 +2944,62 @@ class MainFrame(wx.Frame):
             name = "Local"
 
         self.statusbar.SetStatusText(f"Fetching {name} preferences...", 0)
-        self.thread_pool.submit(self._fetch_remote_preferences)
+        self.thread_pool.submit(self._fetch_remote_preferences, self.client, self.client_generation)
 
-    def _fetch_remote_preferences(self):
+    def _fetch_remote_preferences(self, client, generation):
         try:
-            prefs = self.client.get_app_preferences()
+            prefs = client.get_app_preferences()
+            if generation != self.client_generation:
+                return
             if prefs is None:
                 wx.CallAfter(wx.MessageBox, "Failed to retrieve preferences from remote client. The client might not support this feature or there is a connection issue.", "Error", wx.OK | wx.ICON_ERROR)
                 wx.CallAfter(self.statusbar.SetStatusText, "Failed to fetch preferences", 0)
                 return
-            wx.CallAfter(self._show_remote_preferences_dialog, prefs)
+            wx.CallAfter(self._show_remote_preferences_dialog, prefs, client, generation)
         except Exception as e:
             wx.CallAfter(wx.LogError, f"Failed to fetch remote preferences: {e}")
             wx.CallAfter(self.statusbar.SetStatusText, "Error fetching preferences", 0)
 
-    def _show_remote_preferences_dialog(self, prefs):
+    def _show_remote_preferences_dialog(self, prefs, client=None, generation=None):
+        if generation is not None and generation != self.client_generation:
+            return
         if prefs is None:
             wx.MessageBox("Failed to retrieve preferences from remote client.", "Error", wx.OK | wx.ICON_ERROR)
             return
+        client = client or self.client
 
         client_name = "Remote"
-        if isinstance(self.client, QBittorrentClient):
+        if isinstance(client, QBittorrentClient):
             client_name = "qBittorrent"
-        elif isinstance(self.client, RTorrentClient):
+        elif isinstance(client, RTorrentClient):
             client_name = "rTorrent"
-        elif isinstance(self.client, TransmissionClient):
+        elif isinstance(client, TransmissionClient):
             client_name = "Transmission"
-        elif isinstance(self.client, LocalClient):
+        elif isinstance(client, LocalClient):
             client_name = "Local"
 
         dlg = RemotePreferencesDialog(self, prefs, client_name)
         if dlg.ShowModal() == wx.ID_OK:
             try:
                 parsed = dlg.GetPreferences()
-                self.thread_pool.submit(self._apply_remote_preferences, parsed)
+                self.thread_pool.submit(self._apply_remote_preferences, client, generation, parsed)
             except ValueError as e:
                 wx.MessageBox(f"{e}", "Error", wx.OK | wx.ICON_ERROR)
         dlg.Destroy()
 
-    def _apply_remote_preferences(self, prefs):
+    def _apply_remote_preferences(self, client, generation, prefs):
         try:
-            self.client.set_app_preferences(prefs)
+            if generation is not None and generation != self.client_generation:
+                return
+            client.set_app_preferences(prefs)
             name = "Remote"
-            if isinstance(self.client, QBittorrentClient):
+            if isinstance(client, QBittorrentClient):
                 name = "qBittorrent"
-            elif isinstance(self.client, RTorrentClient):
+            elif isinstance(client, RTorrentClient):
                 name = "rTorrent"
-            elif isinstance(self.client, TransmissionClient):
+            elif isinstance(client, TransmissionClient):
                 name = "Transmission"
-            elif isinstance(self.client, LocalClient):
+            elif isinstance(client, LocalClient):
                 name = "Local"
             
             wx.CallAfter(self.statusbar.SetStatusText, f"{name} preferences saved", 0)
@@ -3005,14 +3025,25 @@ class MainFrame(wx.Frame):
         self.force_close()
 
     def force_close(self):
-        # Save local state
-        self.tb_icon.RemoveIcon()
-        self.tb_icon.Destroy()
         try:
-            # Provide visual feedback since save_state can take a few seconds
+            self.timer.Stop()
+            self.rss_timer.Stop()
+        except Exception:
+            pass
+        try:
+            self.thread_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        try:
+            self.tb_icon.RemoveIcon()
+            self.tb_icon.Destroy()
+        except Exception:
+            pass
+        try:
+            # Provide visual feedback since shutdown can take a few seconds.
             wx.BeginBusyCursor()
             try:
-                SessionManager.get_instance().save_state()
+                SessionManager.get_instance().shutdown()
             finally:
                 wx.EndBusyCursor()
         except Exception:
@@ -3125,15 +3156,18 @@ class MainFrame(wx.Frame):
         self.refreshing = True
         filter_mode = self.current_filter
         generation = self.client_generation
-        self.thread_pool.submit(self._fetch_and_process_data, filter_mode, generation)
+        client = self.client
+        self.thread_pool.submit(self._fetch_and_process_data, filter_mode, generation, client)
 
     def get_all_torrents_safe(self):
         with self.data_lock:
             return list(self.all_torrents)
 
-    def _fetch_and_process_data(self, filter_mode, generation):
+    def _fetch_and_process_data(self, filter_mode, generation, client):
         try:
-            torrents = self.client.get_torrents_full()
+            if not client:
+                raise RuntimeError("No active client")
+            torrents = client.get_torrents_full()
             
             display_data = []
             stats = {"All": 0, "Downloading": 0, "Finished": 0, "Seeding": 0, "Stopped": 0, "Failed": 0}
@@ -3188,7 +3222,7 @@ class MainFrame(wx.Frame):
             
             g_down, g_up = 0, 0
             try:
-                g_down, g_up = self.client.get_global_stats()
+                g_down, g_up = client.get_global_stats()
             except Exception:
                 pass
             
@@ -3384,9 +3418,7 @@ class MainFrame(wx.Frame):
 
     def _download_and_add_torrent(self, url, default_path):
         try:
-            r = requests.get(safe_encode_url(url), timeout=30)
-            r.raise_for_status()
-            data = r.content
+            data = download_torrent_url(url)
             wx.CallAfter(self._show_add_after_download, data, default_path)
         except Exception as e:
             wx.CallAfter(wx.LogError, f"Failed to download torrent from URL: {e}")
@@ -3448,12 +3480,21 @@ class MainFrame(wx.Frame):
         self.thread_pool.submit(self._apply_background, action, hashes, label)
 
     def _apply_background(self, action, hashes, label):
-        try:
-            for h in hashes:
+        failed = 0
+        last_error = None
+        for h in hashes:
+            try:
                 action(h)
+            except Exception as e:
+                failed += 1
+                last_error = e
+        if failed == 0:
             wx.CallAfter(self._on_action_complete, f"{label} complete")
-        except Exception as e:
-            wx.CallAfter(self._on_action_error, f"Failed to {label.lower()} torrent: {e}")
+        elif failed < len(hashes):
+            wx.CallAfter(self.statusbar.SetStatusText, f"{label} complete ({failed} failed). Last error: {last_error}", 0)
+            wx.CallAfter(self.refresh_data)
+        else:
+            wx.CallAfter(self._on_action_error, f"Failed to {label.lower()} torrent: {last_error}")
 
     def _get_all_hashes(self):
         hashes = []

@@ -110,7 +110,7 @@ def main():
                 done_str = f"{done_percent:.1f}%"
                 time_left = format_time(t.eta)
                 seeds = f"{t.num_seeds}/{t.num_complete}"
-                leechers = f"{t.num_leechers}/{t.num_incomplete}"
+                leechers = f"{t.num_leechs}/{t.num_incomplete}"
             elif client_type == 'rtorrent':
                 name = t['name'][:50]
                 size = format_size(t['size'])

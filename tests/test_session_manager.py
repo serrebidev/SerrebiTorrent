@@ -124,6 +124,14 @@ def test_apply_preferences_treats_zero_upload_slots_as_unlimited(session_manager
 
     assert call_args['unchoke_slots_limit'] == -1
 
+
+def test_qbittorrent_reported_version_matches_fingerprint():
+    import session_manager as sm
+
+    assert sm.QBITTORRENT_REPORTED_VERSION == "5.2.2"
+    assert sm.QBITTORRENT_USER_AGENT == "qBittorrent/5.2.2"
+    assert sm.QBITTORRENT_PEER_FINGERPRINT == b"-qB5220-"
+
 def test_add_magnet(session_manager, mock_libtorrent_environment):
     magnet = "magnet:?xt=urn:btih:abcdef"
     save_path = "/tmp"
@@ -140,6 +148,7 @@ def test_add_magnet(session_manager, mock_libtorrent_environment):
     session_manager.ses.add_torrent.assert_called()
     assert "abcdef" in session_manager.torrents_db
     assert session_manager.torrents_db["abcdef"]['save_path'] == save_path
+    assert session_manager.torrents_db["abcdef"]['magnet_uri'] == magnet
 
 def test_remove_torrent(session_manager, mock_libtorrent_environment):
     info_hash = "abcdef"

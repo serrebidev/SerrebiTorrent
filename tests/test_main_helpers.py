@@ -27,3 +27,10 @@ def test_created_torrent_add_uses_source_parent_as_save_path():
 
     assert "seed_save_path_for_source(source_path)" in source
     assert "seed_save_path," in source
+
+
+def test_clamp_rss_interval():
+    assert main.clamp_rss_interval(0) == 5
+    assert main.clamp_rss_interval("abc") == 300
+    assert main.clamp_rss_interval(999999) == 86400
+    assert main.clamp_rss_interval(600) == 600

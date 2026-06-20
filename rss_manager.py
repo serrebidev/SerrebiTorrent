@@ -3,6 +3,7 @@ import os
 import re
 import requests
 import threading
+from urllib.parse import urlparse
 from defusedxml import ElementTree as ET
 from app_paths import get_data_dir
 
@@ -30,8 +31,21 @@ class RSSManager:
         with self.lock:
             data = {'feeds': self.feeds, 'rules': self.rules}
             try:
-                with open(RSS_FILE, 'w') as f:
-                    json.dump(data, f, indent=4)
+                # Atomic write: a direct open('w') truncates rss.json immediately,
+                # so a crash mid-write loses all feeds/rules. Write a temp + rename.
+                tmp = f"{RSS_FILE}.{os.getpid()}.tmp"
+                try:
+                    with open(tmp, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=4)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp, RSS_FILE)
+                finally:
+                    if os.path.exists(tmp):
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
             except Exception as e:
                 print(f"Failed to save RSS: {e}")
 
@@ -76,13 +90,49 @@ class RSSManager:
             self.rules = []
             self.save()
 
+    def is_downloaded(self, url, uid):
+        """True if `uid` from feed `url` has already been auto-downloaded."""
+        if not uid:
+            return False
+        with self.lock:
+            feed = self.feeds.get(url)
+            if not feed:
+                return False
+            return uid in feed.get('downloaded', [])
+
+    def mark_downloaded(self, url, uid):
+        """Record `uid` as auto-downloaded so it is not re-added on the next poll."""
+        if not uid:
+            return
+        with self.lock:
+            feed = self.feeds.get(url)
+            if feed is None:
+                return
+            seen = feed.setdefault('downloaded', [])
+            if uid in seen:
+                return
+            seen.append(uid)
+            # Bound growth: stale items drop out of the feed and never recur.
+            if len(seen) > 1000:
+                del seen[:-1000]
+            self.save()
+
     def fetch_feed(self, url):
         try:
-            r = requests.get(url, timeout=10)
+            parsed = urlparse(url)
+            if parsed.scheme.lower() not in ('http', 'https'):
+                raise ValueError("RSS feed URL must use http or https")
+            # Cap the response size to avoid memory exhaustion from a hostile/huge feed.
+            r = requests.get(url, timeout=10, stream=True)
             r.raise_for_status()
-            
-            # Simple RSS/Atom parser
-            root = ET.fromstring(r.content)
+            content = b""
+            for chunk in r.iter_content(8192):
+                content += chunk
+                if len(content) > 10 * 1024 * 1024:  # 10 MB
+                    raise ValueError("RSS feed exceeds 10 MB limit")
+
+            # Simple RSS/Atom parser (defusedxml blocks XXE / entity expansion)
+            root = ET.fromstring(content)
             articles = []
             
             # Handle RSS 2.0
@@ -100,7 +150,7 @@ class RSSManager:
                 
                 if title is not None and t_url:
                     articles.append({
-                        'title': title.text,
+                        'title': title.text or "",  # avoid None -> re.search TypeError
                         'link': t_url,
                         'uid': t_url # simplified UID
                     })
@@ -189,7 +239,7 @@ class RSSManager:
         # Helper to avoid dupes
         def profile_exists(url, user):
             for pid, p in existing_profiles.items():
-                if p['url'] == url and p['user'] == user:
+                if p.get('url') == url and p.get('user') == user:
                     return True
             return False
 

@@ -480,7 +480,65 @@ def register_associations():
     except Exception as e:
         wx.LogError(f"Failed to register associations: {e}")
 
-class TorrentListCtrl(wx.ListCtrl):
+class AccessibleVirtualListMixin:
+    """Keep one focused row alive across virtual-list refreshes for NVDA.
+
+    NVDA announces the row carrying ``wx.LIST_STATE_FOCUSED`` as the user
+    arrows through a list. A virtual ``wx.ListCtrl`` silently drops that state
+    whenever ``SetItemCount()`` runs (and the torrent list's per-tick
+    ``Select()`` loop churned it too), so after the 2-second auto-refresh the
+    focused row was gone and arrowing announced nothing — while Tabbing in
+    still worked. Route every populate through ``set_virtual_item_count()``
+    (or call ``_restore_focus_row()`` after a manual ``SetItemCount``) so a
+    single focused row is preserved/re-seeded after each rebuild.
+    """
+
+    def _list_has_focus(self):
+        try:
+            return wx.Window.FindFocus() is self
+        except Exception:
+            return False
+
+    def _restore_focus_row(self, item_count, preserve_idx=None):
+        """Re-assert one wx.LIST_STATE_FOCUSED row so NVDA keeps announcing.
+
+        Only moves the focused row when this control actually holds keyboard
+        focus (otherwise a background refresh would yank focus from wherever
+        the user is working); when unfocused it merely seeds a baseline row if
+        none exists, which fires no announcement.
+        """
+        if item_count <= 0:
+            return
+        idx = preserve_idx if (preserve_idx is not None and preserve_idx >= 0) else 0
+        idx = min(idx, item_count - 1)
+        current = self.GetFocusedItem()
+        if current == idx:
+            return  # already focused here -> don't re-fire (avoids double speech)
+        has_focus = self._list_has_focus()
+        if not has_focus and current != -1:
+            return  # user is elsewhere and a focused row exists -> leave it be
+        try:
+            self.SetItemState(idx, wx.LIST_STATE_FOCUSED, wx.LIST_STATE_FOCUSED)
+            if has_focus:
+                self.EnsureVisible(idx)
+        except Exception:
+            pass
+
+    def set_virtual_item_count(self, item_count, preserve_idx=None):
+        """SetItemCount + Refresh while preserving the focused row.
+
+        Skips SetItemCount when the count is unchanged (which would needlessly
+        wipe the focused row), repaints for updated text, then restores focus.
+        """
+        if preserve_idx is None:
+            preserve_idx = self.GetFocusedItem()
+        if self.GetItemCount() != item_count:
+            self.SetItemCount(item_count)
+        self.Refresh()
+        self._restore_focus_row(item_count, preserve_idx)
+
+
+class TorrentListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
     def __init__(self, parent, id=wx.ID_ANY, pos=wx.DefaultPosition,
                  size=wx.DefaultSize, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES):
         super().__init__(parent, id, pos, size, style)
@@ -559,29 +617,52 @@ class TorrentListCtrl(wx.ListCtrl):
         except Exception:
             return ""
 
+    def _focused_hash(self):
+        idx = self.GetFocusedItem()
+        if 0 <= idx < len(self.data):
+            return self.data[idx].get('hash')
+        return None
+
+    def _index_of_hash(self, target_hash):
+        if target_hash is None:
+            return None
+        for idx, row in enumerate(self.data):
+            if row.get('hash') == target_hash:
+                return idx
+        return None
+
     def update_data(self, new_data):
-        # Preserve selection by torrent hash; row indexes can move after refresh/sort.
+        # Preserve selection AND keyboard focus by torrent hash; row indexes can
+        # move after refresh/sort, and NVDA announces the focused row on arrow.
         selected_hashes = set(self.get_selected_hashes())
+        focused_hash = self._focused_hash()
+        old_order = [row.get('hash') for row in self.data]
+
         self.data = new_data
         self._apply_sort()
-        
-        current_count = self.GetItemCount()
-        new_count = len(self.data)
-        
-        if current_count != new_count:
-            self.SetItemCount(new_count)
-        
+        new_order = [row.get('hash') for row in self.data]
+
+        if self.GetItemCount() != len(self.data):
+            self.SetItemCount(len(self.data))
         # Always refresh to update text
         self.Refresh()
-        if selected_hashes:
+
+        # Re-apply selection only when the visible rows actually changed, so the
+        # 2-second auto-refresh no longer churns selection/focus while the user
+        # is reading the list with a screen reader.
+        if selected_hashes and new_order != old_order:
             for idx, row in enumerate(self.data):
                 try:
                     self.Select(idx, row.get('hash') in selected_hashes)
                 except Exception:
                     pass
 
+        # Restore the focused row last so NVDA keeps announcing on arrow.
+        self._restore_focus_row(len(self.data), self._index_of_hash(focused_hash))
+
     def on_col_click(self, event):
         selected_hashes = set(self.get_selected_hashes())
+        focused_hash = self._focused_hash()
         col = event.GetColumn()
         if col == self.sort_col:
             self.sort_asc = not self.sort_asc
@@ -590,12 +671,14 @@ class TorrentListCtrl(wx.ListCtrl):
             self.sort_asc = True
         self._apply_sort()
         self.Refresh()
+        # Sorting reorders rows: re-apply selection and restore focus by hash.
         if selected_hashes:
             for idx, row in enumerate(self.data):
                 try:
                     self.Select(idx, row.get('hash') in selected_hashes)
                 except Exception:
                     pass
+        self._restore_focus_row(len(self.data), self._index_of_hash(focused_hash))
 
     def _apply_sort(self):
         if self.sort_col == -1 or not self.data:
@@ -1601,7 +1684,7 @@ class RemotePreferencesDialog(wx.Dialog):
 
         return prefs
 
-class FilesListCtrl(wx.ListCtrl):
+class FilesListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "Name", width=400)
@@ -1612,8 +1695,7 @@ class FilesListCtrl(wx.ListCtrl):
 
     def set_data(self, data):
         self.data = data
-        self.SetItemCount(len(data))
-        self.Refresh()
+        self.set_virtual_item_count(len(data))
 
     def OnGetItemText(self, item, col):
         if item >= len(self.data):
@@ -1641,7 +1723,7 @@ class FilesListCtrl(wx.ListCtrl):
             return str(p)
         return ""
 
-class PeersListCtrl(wx.ListCtrl):
+class PeersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "IP", width=150)
@@ -1653,8 +1735,7 @@ class PeersListCtrl(wx.ListCtrl):
 
     def set_data(self, data):
         self.data = data
-        self.SetItemCount(len(data))
-        self.Refresh()
+        self.set_virtual_item_count(len(data))
 
     def OnGetItemText(self, item, col):
         if item >= len(self.data):
@@ -1681,7 +1762,7 @@ class PeersListCtrl(wx.ListCtrl):
             rate /= 1024
         return f"{rate:.1f} TB/s"
 
-class TrackersListCtrl(wx.ListCtrl):
+class TrackersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "URL", width=300)
@@ -1692,8 +1773,7 @@ class TrackersListCtrl(wx.ListCtrl):
 
     def set_data(self, data):
         self.data = data
-        self.SetItemCount(len(data))
-        self.Refresh()
+        self.set_virtual_item_count(len(data))
 
     def OnGetItemText(self, item, col):
         if item >= len(self.data):
@@ -1986,7 +2066,7 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
     def on_exit(self, event):
         self.frame.force_close()
 
-class ArticleListCtrl(wx.ListCtrl):
+class ArticleListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
     def __init__(self, parent, panel):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL)
         self.panel = panel
@@ -2311,8 +2391,7 @@ class RSSPanel(wx.Panel):
         data = self.manager.feeds.get(url)
         if data:
             self.current_articles = data.get('articles', [])
-            self.article_list.SetItemCount(len(self.current_articles))
-            self.article_list.Refresh()
+            self.article_list.set_virtual_item_count(len(self.current_articles))
 
     def on_download_article(self, event):
         idx = event.GetIndex()
@@ -2887,7 +2966,6 @@ class MainFrame(wx.Frame):
 
     def _auto_start_hashes(self, generation, hashes):
         try:
-            import time
             time.sleep(0.3)
             for h in hashes:
                 if generation != self.client_generation:

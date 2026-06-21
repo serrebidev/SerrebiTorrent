@@ -61,6 +61,20 @@ class FakeVirtualList(main.AccessibleVirtualListMixin):
         return self._has_focus
 
 
+class FakeFilesList(FakeVirtualList):
+    _focused_file_key = main.FilesListCtrl._focused_file_key
+    _index_of_file_key = main.FilesListCtrl._index_of_file_key
+    set_data = main.FilesListCtrl.set_data
+
+    def __init__(self, data, focused=-1, item_count=0, has_focus=False):
+        super().__init__(focused=focused, item_count=item_count, has_focus=has_focus)
+        self.data = data
+
+    def SetItemCount(self, n):
+        super().SetItemCount(n)
+        self._focused = -1
+
+
 def test_focus_moves_to_preserved_row_when_list_has_focus():
     lst = FakeVirtualList(focused=2, item_count=10, has_focus=True)
     lst._restore_focus_row(10, preserve_idx=5)
@@ -74,6 +88,16 @@ def test_focus_noop_when_already_on_target_row():
     lst._restore_focus_row(10, preserve_idx=5)
     # Already focused there -> must not re-fire (would double-speak every 2s).
     assert lst.set_state_calls == []
+
+
+def test_focus_can_be_forced_when_screen_reader_needs_transition():
+    lst = FakeVirtualList(focused=5, item_count=10, has_focus=True)
+    lst._restore_focus_row(10, preserve_idx=5, force=True)
+    assert lst.set_state_calls == [
+        (5, 0, wx.LIST_STATE_FOCUSED),
+        (5, wx.LIST_STATE_FOCUSED, wx.LIST_STATE_FOCUSED),
+    ]
+    assert lst.ensure_visible_calls == [5]
 
 
 def test_focus_not_stolen_when_unfocused_and_row_exists():
@@ -117,6 +141,34 @@ def test_set_virtual_item_count_sets_count_when_changed():
     lst.set_virtual_item_count(8)
     assert lst.set_count_calls == [8]
     assert lst.refresh_calls == 1
+
+
+def test_navigation_pulse_reasserts_new_focused_row():
+    lst = FakeVirtualList(focused=3, item_count=8, has_focus=True)
+    lst._accessible_pulse_navigation = True
+    lst._force_focus_after_navigation(before_idx=2)
+    assert lst.set_state_calls == [
+        (3, 0, wx.LIST_STATE_FOCUSED),
+        (3, wx.LIST_STATE_FOCUSED, wx.LIST_STATE_FOCUSED),
+    ]
+    assert lst.ensure_visible_calls == [3]
+
+
+def test_files_set_data_restores_focused_file_after_wx_count_reset():
+    old_files = [
+        {"index": 0, "name": "a.bin"},
+        {"index": 1, "name": "b.bin"},
+    ]
+    new_files = [
+        {"index": 0, "name": "a.bin"},
+        {"index": 1, "name": "b.bin"},
+        {"index": 2, "name": "c.bin"},
+    ]
+    lst = FakeFilesList(old_files, focused=1, item_count=2, has_focus=True)
+    lst.set_data(new_files)
+    assert lst.set_count_calls == [3]
+    assert lst.set_state_calls == [(1, wx.LIST_STATE_FOCUSED, wx.LIST_STATE_FOCUSED)]
+    assert lst.ensure_visible_calls == [1]
 
 
 def test_detail_hash_uses_focused_torrent_before_selection():

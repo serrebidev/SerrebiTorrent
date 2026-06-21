@@ -508,13 +508,30 @@ class AccessibleVirtualListMixin:
     single focused row is preserved/re-seeded after each rebuild.
     """
 
+    _ACCESSIBLE_NAV_KEYS = {
+        wx.WXK_UP,
+        wx.WXK_DOWN,
+        wx.WXK_LEFT,
+        wx.WXK_RIGHT,
+        wx.WXK_HOME,
+        wx.WXK_END,
+        wx.WXK_PAGEUP,
+        wx.WXK_PAGEDOWN,
+    }
+
+    def init_accessible_virtual_list(self, *, pulse_navigation=False):
+        self._accessible_pulse_navigation = pulse_navigation
+        self.Bind(wx.EVT_SET_FOCUS, self._on_accessible_set_focus)
+        if pulse_navigation:
+            self.Bind(wx.EVT_KEY_DOWN, self._on_accessible_key_down)
+
     def _list_has_focus(self):
         try:
             return wx.Window.FindFocus() is self
         except Exception:
             return False
 
-    def _restore_focus_row(self, item_count, preserve_idx=None):
+    def _restore_focus_row(self, item_count, preserve_idx=None, force=False):
         """Re-assert one wx.LIST_STATE_FOCUSED row so NVDA keeps announcing.
 
         Only moves the focused row when this control actually holds keyboard
@@ -527,12 +544,15 @@ class AccessibleVirtualListMixin:
         idx = preserve_idx if (preserve_idx is not None and preserve_idx >= 0) else 0
         idx = min(idx, item_count - 1)
         current = self.GetFocusedItem()
-        if current == idx:
-            return  # already focused here -> don't re-fire (avoids double speech)
         has_focus = self._list_has_focus()
+        force = bool(force and has_focus)
+        if current == idx and not force:
+            return  # already focused here -> don't re-fire (avoids double speech)
         if not has_focus and current != -1:
             return  # user is elsewhere and a focused row exists -> leave it be
         try:
+            if force and current == idx:
+                self.SetItemState(idx, 0, wx.LIST_STATE_FOCUSED)
             self.SetItemState(idx, wx.LIST_STATE_FOCUSED, wx.LIST_STATE_FOCUSED)
             if has_focus:
                 self.EnsureVisible(idx)
@@ -547,10 +567,39 @@ class AccessibleVirtualListMixin:
         """
         if preserve_idx is None:
             preserve_idx = self.GetFocusedItem()
-        if self.GetItemCount() != item_count:
+        count_changed = self.GetItemCount() != item_count
+        if count_changed:
             self.SetItemCount(item_count)
         self.Refresh()
-        self._restore_focus_row(item_count, preserve_idx)
+        self._restore_focus_row(item_count, preserve_idx, force=count_changed)
+
+    def _force_current_focus_row(self, fallback_idx=None):
+        item_count = self.GetItemCount()
+        if item_count <= 0 or not self._list_has_focus():
+            return
+        idx = self.GetFocusedItem()
+        if idx < 0:
+            idx = fallback_idx if fallback_idx is not None and fallback_idx >= 0 else 0
+        self._restore_focus_row(item_count, idx, force=True)
+
+    def _on_accessible_set_focus(self, event):
+        event.Skip()
+        wx.CallAfter(self._force_current_focus_row)
+
+    def _on_accessible_key_down(self, event):
+        before_idx = self.GetFocusedItem()
+        nav_key = event.GetKeyCode() in self._ACCESSIBLE_NAV_KEYS
+        event.Skip()
+        if nav_key:
+            wx.CallAfter(self._force_focus_after_navigation, before_idx)
+
+    def _force_focus_after_navigation(self, before_idx):
+        if not getattr(self, "_accessible_pulse_navigation", False):
+            return
+        idx = self.GetFocusedItem()
+        if idx == before_idx and idx >= 0:
+            return
+        self._force_current_focus_row(before_idx)
 
 
 class TorrentListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
@@ -572,6 +621,7 @@ class TorrentListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.InsertColumn(COL_AVAILABILITY, "Availability", width=110)
 
         self.SetName("Torrent List")
+        self.init_accessible_virtual_list()
         self.Bind(wx.EVT_LIST_COL_CLICK, self.on_col_click)
 
     def OnGetItemText(self, item, col):
@@ -1710,10 +1760,28 @@ class FilesListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.InsertColumn(2, "Progress", width=100)
         self.InsertColumn(3, "Priority", width=100)
         self.data = []
+        self.SetName("Files")
+        self.init_accessible_virtual_list(pulse_navigation=True)
 
     def set_data(self, data):
+        focused_key = self._focused_file_key()
         self.data = data
-        self.set_virtual_item_count(len(data))
+        self.set_virtual_item_count(len(data), self._index_of_file_key(focused_key))
+
+    def _focused_file_key(self):
+        idx = self.GetFocusedItem()
+        if 0 <= idx < len(self.data):
+            row = self.data[idx]
+            return (row.get('index'), row.get('name'))
+        return None
+
+    def _index_of_file_key(self, key):
+        if key is None:
+            return None
+        for idx, row in enumerate(self.data):
+            if (row.get('index'), row.get('name')) == key:
+                return idx
+        return None
 
     def OnGetItemText(self, item, col):
         if item >= len(self.data):
@@ -1750,6 +1818,8 @@ class PeersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.InsertColumn(3, "Down Speed", width=100)
         self.InsertColumn(4, "Up Speed", width=100)
         self.data = []
+        self.SetName("Peers")
+        self.init_accessible_virtual_list(pulse_navigation=True)
 
     def set_data(self, data):
         self.data = data
@@ -1788,6 +1858,8 @@ class TrackersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.InsertColumn(2, "Peers", width=80)
         self.InsertColumn(3, "Message", width=300)
         self.data = []
+        self.SetName("Trackers")
+        self.init_accessible_virtual_list(pulse_navigation=True)
 
     def set_data(self, data):
         self.data = data
@@ -2090,6 +2162,8 @@ class ArticleListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.panel = panel
         self.InsertColumn(0, "Title", width=400)
         self.InsertColumn(1, "Link", width=300)
+        self.SetName("RSS Articles")
+        self.init_accessible_virtual_list(pulse_navigation=True)
 
     def OnGetItemText(self, item, col):
         if item < len(self.panel.current_articles):

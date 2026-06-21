@@ -35,6 +35,7 @@ class FakeVirtualList(main.AccessibleVirtualListMixin):
         self.ensure_visible_calls = []
         self.set_count_calls = []
         self.refresh_calls = 0
+        self.focus_event_calls = []
 
     def GetFocusedItem(self):
         return self._focused
@@ -57,8 +58,15 @@ class FakeVirtualList(main.AccessibleVirtualListMixin):
     def EnsureVisible(self, idx):
         self.ensure_visible_calls.append(idx)
 
+    def GetHandle(self):
+        return 1234
+
     def _list_has_focus(self):
         return self._has_focus
+
+    def _notify_accessible_focus_event(self, idx):
+        self.focus_event_calls.append(idx)
+        return True
 
 
 class FakeFilesList(FakeVirtualList):
@@ -152,6 +160,47 @@ def test_navigation_pulse_reasserts_new_focused_row():
         (3, wx.LIST_STATE_FOCUSED, wx.LIST_STATE_FOCUSED),
     ]
     assert lst.ensure_visible_calls == [3]
+    assert lst.focus_event_calls == [3]
+
+
+def test_accessible_focus_event_uses_listview_child_id(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        main,
+        "notify_win_event",
+        lambda event, hwnd, object_id, child_id: calls.append((event, hwnd, object_id, child_id)) or True,
+    )
+
+    lst = FakeVirtualList(focused=3, item_count=8, has_focus=True)
+    assert main.AccessibleVirtualListMixin._notify_accessible_focus_event(lst, 3) is True
+    assert calls == [(main.EVENT_OBJECT_FOCUS, 1234, main.OBJID_CLIENT, 4)]
+
+
+def test_accessible_focus_event_skips_unfocused_list(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        main,
+        "notify_win_event",
+        lambda event, hwnd, object_id, child_id: calls.append((event, hwnd, object_id, child_id)) or True,
+    )
+
+    lst = FakeVirtualList(focused=3, item_count=8, has_focus=False)
+    assert main.AccessibleVirtualListMixin._notify_accessible_focus_event(lst, 3) is False
+    assert calls == []
+
+
+def test_accessible_focus_event_deduplicates_same_row(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        main,
+        "notify_win_event",
+        lambda event, hwnd, object_id, child_id: calls.append((event, hwnd, object_id, child_id)) or True,
+    )
+
+    lst = FakeVirtualList(focused=3, item_count=8, has_focus=True)
+    assert main.AccessibleVirtualListMixin._notify_accessible_focus_event(lst, 3) is True
+    assert main.AccessibleVirtualListMixin._notify_accessible_focus_event(lst, 3) is False
+    assert calls == [(main.EVENT_OBJECT_FOCUS, 1234, main.OBJID_CLIENT, 4)]
 
 
 def test_files_set_data_restores_focused_file_after_wx_count_reset():

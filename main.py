@@ -6,6 +6,8 @@ import os
 import subprocess
 from collections import OrderedDict
 import time
+import ctypes
+from ctypes import wintypes
 
 from libtorrent_env import prepare_libtorrent_dlls
 
@@ -40,6 +42,34 @@ COL_AVAILABILITY = 7
 # Rows in the torrent list carry an extra hidden value at the end (info hash).
 ROW_HASH_INDEX = -1
 APP_NAME = "SerrebiTorrent"
+
+EVENT_OBJECT_FOCUS = 0x8005
+OBJID_CLIENT = -4
+_NOTIFY_WIN_EVENT = None
+
+
+def notify_win_event(event, hwnd, object_id, child_id):
+    if os.name != "nt" or not hwnd:
+        return False
+
+    global _NOTIFY_WIN_EVENT
+    if _NOTIFY_WIN_EVENT is None:
+        try:
+            fn = ctypes.windll.user32.NotifyWinEvent
+            fn.argtypes = [wintypes.DWORD, wintypes.HWND, wintypes.LONG, wintypes.LONG]
+            fn.restype = None
+            _NOTIFY_WIN_EVENT = fn
+        except Exception:
+            _NOTIFY_WIN_EVENT = False
+
+    if not _NOTIFY_WIN_EVENT:
+        return False
+
+    try:
+        _NOTIFY_WIN_EVENT(event, hwnd, object_id, child_id)
+        return True
+    except Exception:
+        return False
 
 
 def torrent_magnet_link(torrent):
@@ -521,9 +551,12 @@ class AccessibleVirtualListMixin:
 
     def init_accessible_virtual_list(self, *, pulse_navigation=False):
         self._accessible_pulse_navigation = pulse_navigation
+        self._last_accessible_focus_event_idx = None
+        self._last_accessible_focus_event_at = 0.0
         self.Bind(wx.EVT_SET_FOCUS, self._on_accessible_set_focus)
         if pulse_navigation:
             self.Bind(wx.EVT_KEY_DOWN, self._on_accessible_key_down)
+            self.Bind(wx.EVT_LIST_ITEM_FOCUSED, self._on_accessible_item_focused)
 
     def _list_has_focus(self):
         try:
@@ -576,15 +609,21 @@ class AccessibleVirtualListMixin:
     def _force_current_focus_row(self, fallback_idx=None):
         item_count = self.GetItemCount()
         if item_count <= 0 or not self._list_has_focus():
-            return
+            return None
         idx = self.GetFocusedItem()
         if idx < 0:
             idx = fallback_idx if fallback_idx is not None and fallback_idx >= 0 else 0
         self._restore_focus_row(item_count, idx, force=True)
+        return idx
 
     def _on_accessible_set_focus(self, event):
         event.Skip()
         wx.CallAfter(self._force_current_focus_row)
+
+    def _on_accessible_item_focused(self, event):
+        event.Skip()
+        if getattr(self, "_accessible_pulse_navigation", False):
+            wx.CallAfter(self._notify_accessible_focus_event, event.GetIndex())
 
     def _on_accessible_key_down(self, event):
         before_idx = self.GetFocusedItem()
@@ -599,7 +638,30 @@ class AccessibleVirtualListMixin:
         idx = self.GetFocusedItem()
         if idx == before_idx and idx >= 0:
             return
-        self._force_current_focus_row(before_idx)
+        idx = self._force_current_focus_row(before_idx)
+        if idx is not None:
+            self._notify_accessible_focus_event(idx)
+
+    def _notify_accessible_focus_event(self, idx):
+        if idx is None or idx < 0 or not self._list_has_focus():
+            return False
+
+        now = time.monotonic()
+        last_idx = getattr(self, "_last_accessible_focus_event_idx", None)
+        last_at = getattr(self, "_last_accessible_focus_event_at", 0.0)
+        if last_idx == idx and now - last_at < 0.08:
+            return False
+
+        try:
+            hwnd = int(self.GetHandle())
+        except Exception:
+            return False
+
+        if notify_win_event(EVENT_OBJECT_FOCUS, hwnd, OBJID_CLIENT, idx + 1):
+            self._last_accessible_focus_event_idx = idx
+            self._last_accessible_focus_event_at = now
+            return True
+        return False
 
 
 class TorrentListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):

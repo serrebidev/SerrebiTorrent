@@ -67,6 +67,7 @@ Keep edits lean, comment only when code is not self-explanatory, and leave user-
 <!-- claude-memory:begin (managed by sync-claude-memory.py; canonical files live in C:\Users\admin\.claude - edit there, not here) -->
 ## Memories (shared from ~/.claude - project: c--Users-admin-git-SerrebiTorrent)
 @C:\Users\admin\.claude\projects\c--Users-admin-git-SerrebiTorrent\memory\MEMORY.md
+@C:\Users\admin\.claude\projects\c--Users-admin-git-SerrebiTorrent\memory\nvda-virtual-list-focus.md
 @C:\Users\admin\.claude\projects\c--Users-admin-git-SerrebiTorrent\memory\prefer-root-cause-fixes-over-powershell-fallback.md
 @C:\Users\admin\.claude\projects\c--Users-admin-git-SerrebiTorrent\memory\running-windows-commands-from-bash.md
 <!-- claude-memory:end -->

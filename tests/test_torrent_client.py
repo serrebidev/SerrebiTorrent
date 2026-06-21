@@ -68,6 +68,13 @@ class TestSafeEncodeUrl:
         assert "%5BEZTVx.to%5D" in result
         assert "zoink.ch" in result
 
+    def test_preserve_existing_percent_escapes(self):
+        from clients import safe_encode_url
+        url = "https://example.com/path/File%20Name[Group].torrent"
+        result = safe_encode_url(url)
+        assert "File%20Name%5BGroup%5D.torrent" in result
+        assert "%2520" not in result
+
 
 # ============================================================================
 # Session Manager Tests (Mocked)
@@ -319,6 +326,7 @@ class TestLocalClientUrlEncoding:
 
         class FakeResponse:
             status_code = 200
+            headers = {}
 
             def __enter__(self):
                 return self
@@ -332,10 +340,54 @@ class TestLocalClientUrlEncoding:
             def iter_content(self, chunk_size):
                 yield b"a" * (clients.MAX_TORRENT_DOWNLOAD_BYTES + 1)
 
+        monkeypatch.setattr(clients.socket, "getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 443))])
         monkeypatch.setattr(clients.requests, "get", lambda *args, **kwargs: FakeResponse())
 
         with pytest.raises(ValueError):
             clients.download_torrent_url("https://example.com/test.torrent")
+
+    def test_download_torrent_url_rejects_private_redirect(self, monkeypatch):
+        import clients
+
+        class RedirectResponse:
+            status_code = 302
+            headers = {"Location": "http://127.0.0.1/private.torrent"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                return iter(())
+
+        monkeypatch.setattr(clients.socket, "getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 80))])
+        monkeypatch.setattr(clients.requests, "get", lambda *args, **kwargs: RedirectResponse())
+
+        with pytest.raises(ValueError, match="Private|Localhost|local network"):
+            clients.download_torrent_url("http://example.com/test.torrent")
+
+    def test_local_client_accepts_uppercase_magnet_scheme(self):
+        from clients import LocalClient
+
+        class FakeManager:
+            def __init__(self):
+                self.magnets = []
+
+            def add_magnet(self, url, save_path):
+                self.magnets.append((url, save_path))
+
+        client = LocalClient.__new__(LocalClient)
+        client.m = FakeManager()
+        client._edp = lambda: "C:\\Downloads"
+
+        client.add_torrent_url("MAGNET:?xt=urn:btih:abc")
+
+        assert client.m.magnets == [("MAGNET:?xt=urn:btih:abc", "C:\\Downloads")]
 
 
 class TestLocalClientTorrentStatus:

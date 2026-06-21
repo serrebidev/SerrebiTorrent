@@ -19,7 +19,7 @@ class FakeQbittorrentApiClient:
 
 
 class FakeTransmissionApiClient:
-    def __init__(self, host=None, port=None, username=None, password=None, protocol=None):
+    def __init__(self, host=None, port=None, username=None, password=None, protocol=None, path=None):
         self.calls = []
 
     def remove_torrent(self, torrent_id, delete_data=False):

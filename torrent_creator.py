@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 import wx
 
 from libtorrent_env import prepare_libtorrent_dlls
-from torrent_parsing import build_magnet_from_hashes
+from torrent_parsing import build_magnet_from_hashes, clean_tracker_urls
 
 prepare_libtorrent_dlls()
 
@@ -75,6 +75,28 @@ def _include_torrent_path(path: str) -> bool:
         return False
 
 
+def _is_filesystem_root(path: str) -> bool:
+    normalized = os.path.abspath(path)
+    drive, tail = os.path.splitdrive(normalized)
+    return bool(drive and tail.rstrip("\\/") == "")
+
+
+def _piece_hash_base_path(source_path: str) -> str:
+    normalized = os.path.abspath(source_path)
+    if _is_filesystem_root(normalized):
+        return normalized
+    stripped = normalized.rstrip("\\/")
+    return os.path.dirname(stripped) or normalized
+
+
+def _root_output_stem(path: str) -> str:
+    drive, _ = os.path.splitdrive(os.path.abspath(path))
+    stem = os.path.basename(drive.rstrip("\\/"))
+    if not stem and drive.endswith(":"):
+        stem = drive[:-1]
+    return stem or "output"
+
+
 PIECE_SIZE_CHOICES = [
     ("Auto", 0),
     ("16 KiB", 16 * 1024),
@@ -122,6 +144,7 @@ def create_torrent_bytes(
     if not source_path:
         raise ValueError("Source path is required.")
     source_path = os.path.abspath(source_path)
+    trackers = clean_tracker_urls(trackers)
 
     if not os.path.exists(source_path):
         raise FileNotFoundError(source_path)
@@ -203,8 +226,7 @@ def create_torrent_bytes(
             pass
 
     # Hash pieces
-    base_path = os.path.dirname(source_path.rstrip("\\/")) or os.path.dirname(source_path) or source_path
-    lt.set_piece_hashes(ct, base_path)
+    lt.set_piece_hashes(ct, _piece_hash_base_path(source_path))
 
     e = ct.generate()
 
@@ -392,13 +414,20 @@ class CreateTorrentDialog(wx.Dialog):
     def _auto_output_path(self, src_path: str) -> str:
         if not src_path:
             return ""
-        base = os.path.basename(src_path.rstrip("\\/"))
+        src_path = os.path.abspath(src_path)
+        if _is_filesystem_root(src_path):
+            parent = src_path
+            base = _root_output_stem(src_path)
+        else:
+            stripped = src_path.rstrip("\\/")
+            parent = os.path.dirname(stripped)
+            base = os.path.basename(stripped)
         if not base:
             base = "output"
         name = base
         if name.lower().endswith(".torrent"):
-            return os.path.abspath(name)
-        return os.path.abspath(name + ".torrent")
+            return os.path.abspath(os.path.join(parent, name))
+        return os.path.abspath(os.path.join(parent, name + ".torrent"))
 
     def on_pick_file(self, event):
         with wx.FileDialog(self, "Select File", style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dlg:

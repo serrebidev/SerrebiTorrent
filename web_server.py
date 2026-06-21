@@ -2,10 +2,17 @@ import os
 import threading
 import sys
 import hmac
+import hashlib
+import ipaddress
+import socket
 import time
 import tempfile
 from flask import Flask, request, jsonify, send_from_directory, session, redirect
 from werkzeug.utils import secure_filename
+from urllib.parse import urljoin, urlparse
+
+import requests
+from clients import download_torrent_url
 
 def get_bundle_dir():
     return getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -52,6 +59,9 @@ _AUTH_FAIL_LIMIT = 8
 _AUTH_LOCK_SECONDS = 300
 _auth_lock = threading.Lock()
 _auth_failures = {}  # ip -> (fail_count, window_start_ts)
+_ADD_URL_MAX_REDIRECTS = 5
+_ADD_URL_TIMEOUT = (3, 5)
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
 def _client_ip():
@@ -91,9 +101,129 @@ def _weak_web_credentials():
     return pw == '' or pw == 'password'
 
 
+def _credentials_fingerprint():
+    key = app.secret_key
+    if not isinstance(key, bytes):
+        key = str(key).encode('utf-8')
+    user = str(WEB_CONFIG.get('username') or '')
+    pw = str(WEB_CONFIG.get('password') or '')
+    return hmac.new(key, f"{user}\0{pw}".encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def _clear_web_session():
+    session.pop('logged_in', None)
+    session.pop('csrf_token', None)
+    session.pop('auth_fingerprint', None)
+
+
+def _is_authenticated_session():
+    if not session.get('logged_in'):
+        return False
+    actual = session.get('auth_fingerprint')
+    expected = _credentials_fingerprint()
+    if not actual or not hmac.compare_digest(str(actual), expected):
+        _clear_web_session()
+        return False
+    return True
+
+
+def _is_blocked_add_ip(ip):
+    mapped = getattr(ip, 'ipv4_mapped', None)
+    if mapped:
+        ip = mapped
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    )
+
+
+def _resolve_add_host(host, port):
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError("host could not be resolved") from exc
+    addresses = []
+    for info in infos:
+        try:
+            addresses.append(ipaddress.ip_address(info[4][0]))
+        except (IndexError, ValueError):
+            continue
+    if not addresses:
+        raise ValueError("host did not resolve to an IP address")
+    return tuple(addresses)
+
+
+def _validate_public_add_http_url(u):
+    parsed = urlparse(u)
+    if parsed.scheme.lower() not in ('http', 'https'):
+        raise ValueError("unsupported URL scheme")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL host is required")
+    host_check = host.rstrip('.').lower()
+    if host_check == 'localhost' or host_check.endswith('.localhost'):
+        raise ValueError("localhost URLs are not allowed")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("invalid URL port") from exc
+    if port is None:
+        port = 443 if parsed.scheme.lower() == 'https' else 80
+
+    try:
+        addresses = (ipaddress.ip_address(host_check),)
+    except ValueError:
+        addresses = _resolve_add_host(host, port)
+    if any(_is_blocked_add_ip(ip) for ip in addresses):
+        raise ValueError("private or local network URLs are not allowed")
+    return parsed
+
+
+def _validate_add_url(u):
+    parsed = urlparse(u)
+    scheme = parsed.scheme.lower()
+    if scheme == 'magnet':
+        return
+    if scheme not in ('http', 'https'):
+        raise ValueError("unsupported URL scheme")
+
+    current = u
+    for _ in range(_ADD_URL_MAX_REDIRECTS + 1):
+        _validate_public_add_http_url(current)
+        try:
+            response = requests.get(
+                current,
+                allow_redirects=False,
+                headers={'Range': 'bytes=0-0'},
+                stream=True,
+                timeout=_ADD_URL_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            raise ValueError("could not inspect URL redirects") from exc
+        try:
+            if response.status_code not in _REDIRECT_STATUSES:
+                return
+            location = response.headers.get('Location')
+            if not location:
+                raise ValueError("redirect response missing Location header")
+            current = urljoin(current, location)
+        finally:
+            response.close()
+    raise ValueError("too many redirects")
+
+
 def _allowed_add_url(u):
     """Allow only network/magnet torrent sources; block file://, UNC, SSRF schemes."""
-    return u.lower().startswith(('http://', 'https://', 'magnet:'))
+    try:
+        _validate_add_url(u)
+        return True
+    except ValueError:
+        return False
 
 
 def _csrf_token():
@@ -112,7 +242,7 @@ def protect_mutating_requests():
         return None
     if request.endpoint == 'api_login':
         return None
-    if not session.get('logged_in'):
+    if not _is_authenticated_session():
         return None
     expected = session.get('csrf_token')
     supplied = request.headers.get('X-CSRF-Token') or request.form.get('_csrf')
@@ -134,7 +264,7 @@ WEB_CONFIG = {
 
 def login_required(f):
     def wrapper(*args, **kwargs):
-        if not session.get('logged_in'):
+        if not _is_authenticated_session():
             if request.path.startswith('/api/'):
                 return "Unauthorized", 403
             return redirect('/login.html')
@@ -155,7 +285,7 @@ def login_page():
 def serve_static(filename):
     # login.html is the only public page; everything else (app.js, index.html,
     # style.css) is part of the authenticated app shell.
-    if filename != 'login.html' and not session.get('logged_in'):
+    if filename != 'login.html' and not _is_authenticated_session():
         return redirect('/login.html')
     return send_from_directory(static_dir, filename)
 
@@ -172,6 +302,7 @@ def api_login():
     if hmac.compare_digest(user, exp_user) and hmac.compare_digest(pw, exp_pw):
         session['logged_in'] = True
         session['csrf_token'] = os.urandom(16).hex()
+        session['auth_fingerprint'] = _credentials_fingerprint()
         session.permanent = True
         _clear_auth_failures(ip)
         return "Ok."
@@ -185,8 +316,7 @@ def api_csrf():
 
 @app.route('/api/v2/auth/logout', methods=['POST'])
 def api_logout():
-    session.pop('logged_in', None)
-    session.pop('csrf_token', None)
+    _clear_web_session()
     return "Ok."
 
 @app.route('/api/v2/profiles')
@@ -395,13 +525,19 @@ def torrents_add():
         for url in urls.split('\n'):
             u = url.strip()
             if u:
-                if not _allowed_add_url(u):
-                    errors.append("rejected-scheme")
-                    print(f"Web add: rejected non-http/magnet URL: {u[:80]!r}")
+                try:
+                    _validate_add_url(u)
+                except ValueError as e:
+                    errors.append("rejected-url")
+                    print(f"Web add: rejected URL {u[:80]!r}: {e}")
                     continue
                 try:
                     attempted += 1
-                    client.add_torrent_url(u, sp=save_path)
+                    if urlparse(u).scheme.lower() == 'magnet':
+                        client.add_torrent_url(u, sp=save_path)
+                    else:
+                        content = download_torrent_url(u)
+                        client.add_torrent_file(content, sp=save_path)
                 except Exception as e:
                     errors.append("url-failed")
                     print(f"Web add URL error for {u[:80]!r}: {e}")
@@ -421,6 +557,8 @@ def torrents_add():
     if attempted == 0 and not errors:
         return "No torrents provided", 400
     if errors:
+        if attempted == 0 and all(error == "rejected-url" for error in errors):
+            return "Invalid torrent URL.", 400
         # Detail is logged server-side; don't leak exception text to clients.
         return "Failed to add torrents.", 500
     return "Ok."

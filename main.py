@@ -3,7 +3,6 @@
 import wx
 import sys
 import os
-import shutil
 import subprocess
 from collections import OrderedDict
 import time
@@ -18,7 +17,7 @@ import json
 import requests # Added for downloading torrent files from URL
 import concurrent.futures
 
-from clients import RTorrentClient, QBittorrentClient, TransmissionClient, LocalClient, download_torrent_url
+from clients import RTorrentClient, QBittorrentClient, TransmissionClient, LocalClient, download_torrent_url, validate_public_torrent_url
 from config_manager import ConfigManager
 from session_manager import SessionManager
 from rss_manager import RSSManager
@@ -561,7 +560,8 @@ class TorrentListCtrl(wx.ListCtrl):
             return ""
 
     def update_data(self, new_data):
-        # new_data is list of dicts
+        # Preserve selection by torrent hash; row indexes can move after refresh/sort.
+        selected_hashes = set(self.get_selected_hashes())
         self.data = new_data
         self._apply_sort()
         
@@ -573,8 +573,15 @@ class TorrentListCtrl(wx.ListCtrl):
         
         # Always refresh to update text
         self.Refresh()
+        if selected_hashes:
+            for idx, row in enumerate(self.data):
+                try:
+                    self.Select(idx, row.get('hash') in selected_hashes)
+                except Exception:
+                    pass
 
     def on_col_click(self, event):
+        selected_hashes = set(self.get_selected_hashes())
         col = event.GetColumn()
         if col == self.sort_col:
             self.sort_asc = not self.sort_asc
@@ -583,6 +590,12 @@ class TorrentListCtrl(wx.ListCtrl):
             self.sort_asc = True
         self._apply_sort()
         self.Refresh()
+        if selected_hashes:
+            for idx, row in enumerate(self.data):
+                try:
+                    self.Select(idx, row.get('hash') in selected_hashes)
+                except Exception:
+                    pass
 
     def _apply_sort(self):
         if self.sort_col == -1 or not self.data:
@@ -1748,31 +1761,38 @@ class TorrentDetailsPanel(wx.Panel):
             return
             
         sel = self.notebook.GetSelection()
+        client = self.frame.client
+        generation = self.frame.client_generation
         if sel == 0: # Files
-            self.frame.thread_pool.submit(self._fetch_files, self.current_hash)
+            self.frame.thread_pool.submit(self._fetch_files, client, generation, self.current_hash)
         elif sel == 1: # Peers
-            self.frame.thread_pool.submit(self._fetch_peers, self.current_hash)
+            self.frame.thread_pool.submit(self._fetch_peers, client, generation, self.current_hash)
         elif sel == 2: # Trackers
-            self.frame.thread_pool.submit(self._fetch_trackers, self.current_hash)
+            self.frame.thread_pool.submit(self._fetch_trackers, client, generation, self.current_hash)
 
-    def _fetch_files(self, info_hash):
+    def _apply_detail_data(self, info_hash, generation, setter, data):
+        if generation != self.frame.client_generation or info_hash != self.current_hash:
+            return
+        setter(data)
+
+    def _fetch_files(self, client, generation, info_hash):
         try:
-            files = self.frame.client.get_files(info_hash)
-            wx.CallAfter(self.files_list.set_data, files)
+            files = client.get_files(info_hash)
+            wx.CallAfter(self._apply_detail_data, info_hash, generation, self.files_list.set_data, files)
         except Exception:
             pass
 
-    def _fetch_peers(self, info_hash):
+    def _fetch_peers(self, client, generation, info_hash):
         try:
-            peers = self.frame.client.get_peers(info_hash)
-            wx.CallAfter(self.peers_list.set_data, peers)
+            peers = client.get_peers(info_hash)
+            wx.CallAfter(self._apply_detail_data, info_hash, generation, self.peers_list.set_data, peers)
         except Exception:
             pass
 
-    def _fetch_trackers(self, info_hash):
+    def _fetch_trackers(self, client, generation, info_hash):
         try:
-            trackers = self.frame.client.get_trackers(info_hash)
-            wx.CallAfter(self.trackers_list.set_data, trackers)
+            trackers = client.get_trackers(info_hash)
+            wx.CallAfter(self._apply_detail_data, info_hash, generation, self.trackers_list.set_data, trackers)
         except Exception:
             pass
 
@@ -1797,8 +1817,11 @@ class TorrentDetailsPanel(wx.Panel):
         menu.Destroy()
 
     def set_priority(self, priority):
-        if not self.current_hash or not self.frame.client:
+        client = self.frame.client
+        generation = self.frame.client_generation
+        if not self.current_hash or not client:
             return
+        info_hash = self.current_hash
         
         # Get selected indices
         item = self.files_list.GetFirstSelected()
@@ -1808,18 +1831,21 @@ class TorrentDetailsPanel(wx.Panel):
             item = self.files_list.GetNextSelected(item)
             
         if indices:
-            self.frame.thread_pool.submit(self._set_priority_bg, self.current_hash, indices, priority)
+            self.frame.thread_pool.submit(self._set_priority_bg, client, generation, info_hash, indices, priority)
 
-    def _set_priority_bg(self, info_hash, indices, priority):
+    def _set_priority_bg(self, client, generation, info_hash, indices, priority):
         try:
+            if generation != self.frame.client_generation:
+                return
             # Batch optimization if possible? Client supports list?
             # Our BaseClient interface is per-file: set_file_priority(hash, idx, prio)
             # We can loop here.
             for idx in indices:
-                self.frame.client.set_file_priority(info_hash, idx, priority)
+                client.set_file_priority(info_hash, idx, priority)
             
             # Refresh
-            self._fetch_files(info_hash)
+            if generation == self.frame.client_generation and info_hash == self.current_hash:
+                self._fetch_files(client, generation, info_hash)
         except Exception:
             pass
 
@@ -2184,6 +2210,8 @@ class RSSPanel(wx.Panel):
         self.SetSizer(sizer)
         
         self.current_articles = []
+        self._refreshing_feeds = set()
+        self._refreshing_feeds_lock = threading.Lock()
         self.refresh_feeds_list()
 
     def refresh_feeds_list(self):
@@ -2202,7 +2230,7 @@ class RSSPanel(wx.Panel):
             url = dlg.GetValue()
             if self.manager.add_feed(url):
                 self.refresh_feeds_list()
-                self.frame.thread_pool.submit(self._update_feed, url)
+                self._submit_feed_update(url)
         dlg.Destroy()
 
     def on_remove_feed(self, event):
@@ -2231,26 +2259,40 @@ class RSSPanel(wx.Panel):
 
     def on_refresh_all(self, event):
         for url in self.manager.feeds:
-            self.frame.thread_pool.submit(self._update_feed, url)
+            self._submit_feed_update(url)
 
-    def _update_feed(self, url):
-        articles = self.manager.fetch_feed(url)
-        # Check auto download (scoped to this feed URL)
-        matches = self.manager.get_matches(articles, feed_url=url)
-        for m in matches:
-            # Skip items already auto-downloaded; otherwise every poll re-adds them.
-            if self.manager.is_downloaded(url, m.get('uid')):
-                continue
-            if self.frame.client:
-                try:
-                    self.frame.client.add_torrent_url(m['link'])
-                    self.manager.mark_downloaded(url, m.get('uid'))
-                    wx.CallAfter(self.frame.statusbar.SetStatusText, f"Auto-added from RSS: {m['title']}", 0)
-                except Exception as e:
-                    print(f"Auto-add error: {e}")
-        
-        wx.CallAfter(self.refresh_feeds_list)
-        wx.CallAfter(self.refresh_articles_if_selected, url)
+    def _submit_feed_update(self, url):
+        with self._refreshing_feeds_lock:
+            if url in self._refreshing_feeds:
+                return
+            self._refreshing_feeds.add(url)
+        self.frame.thread_pool.submit(self._update_feed, url, self.frame.client, self.frame.client_generation)
+
+    def _update_feed(self, url, client, generation):
+        try:
+            articles = self.manager.fetch_feed(url)
+            # Check auto download (scoped to this feed URL)
+            matches = self.manager.get_matches(articles, feed_url=url)
+            for m in matches:
+                # Skip items already auto-downloaded; otherwise every poll re-adds them.
+                if self.manager.is_downloaded(url, m.get('uid')):
+                    continue
+                if client and generation == self.frame.client_generation:
+                    try:
+                        link = m['link']
+                        if not link.lower().startswith("magnet:"):
+                            validate_public_torrent_url(link)
+                        client.add_torrent_url(link)
+                        self.manager.mark_downloaded(url, m.get('uid'))
+                        wx.CallAfter(self.frame.statusbar.SetStatusText, f"Auto-added from RSS: {m['title']}", 0)
+                    except Exception as e:
+                        print(f"Auto-add error: {e}")
+            
+            wx.CallAfter(self.refresh_feeds_list)
+            wx.CallAfter(self.refresh_articles_if_selected, url)
+        finally:
+            with self._refreshing_feeds_lock:
+                self._refreshing_feeds.discard(url)
 
     def refresh_articles_if_selected(self, url):
         sel = self.feed_list.GetSelection()
@@ -2277,16 +2319,25 @@ class RSSPanel(wx.Panel):
         if 0 <= idx < len(self.current_articles):
             article = self.current_articles[idx]
             self.frame.statusbar.SetStatusText(f"Adding torrent: {article['title']}...", 0)
-            self.frame.thread_pool.submit(self.download_article, article)
+            self.frame.thread_pool.submit(
+                self.download_article,
+                article,
+                self.frame.client,
+                self.frame.client_generation,
+            )
 
-    def download_article(self, article):
+    def download_article(self, article, client, generation):
         url = article['link']
-        if self.frame.client:
+        if client and generation == self.frame.client_generation:
             try:
-                self.frame.client.add_torrent_url(url)
-                wx.CallAfter(self.frame.statusbar.SetStatusText, f"Added from RSS: {article['title']}", 0)
+                if not url.lower().startswith("magnet:"):
+                    validate_public_torrent_url(url)
+                client.add_torrent_url(url)
+                if generation == self.frame.client_generation:
+                    wx.CallAfter(self.frame.statusbar.SetStatusText, f"Added from RSS: {article['title']}", 0)
             except Exception as e:
-                wx.CallAfter(wx.LogError, f"Failed to add from RSS: {e}")
+                if generation == self.frame.client_generation:
+                    wx.CallAfter(wx.LogError, f"Failed to add from RSS: {e}")
 
     def on_rules(self, event):
         dlg = RulesManagerDialog(self, self.manager)
@@ -2660,38 +2711,38 @@ class MainFrame(wx.Frame):
         self.thread_pool.submit(self._check_updates_background, manual)
 
     def _check_updates_background(self, manual):
-        try:
-            info = updater.check_for_update()
-            if info is None:
-                wx.CallAfter(self._on_no_update_available, manual)
-            else:
-                wx.CallAfter(self._prompt_update, info)
-        except updater.RateLimitError as e:
-            wx.CallAfter(self._on_update_check_failed, str(e), manual)
-        except Exception as e:
-            wx.CallAfter(self._on_update_check_failed, f"Update check failed: {e}", manual)
-        finally:
-            self.update_check_in_progress = False
+        result = updater.check_for_updates()
+        if result.status == "up_to_date":
+            wx.CallAfter(self._on_no_update_available, manual)
+        elif result.status == "update_available" and result.info is not None:
+            wx.CallAfter(self._prompt_update, result.info)
+        else:
+            wx.CallAfter(self._on_update_check_failed, result.message, manual)
 
     def _on_no_update_available(self, manual):
+        self.update_check_in_progress = False
         if manual:
             wx.MessageBox("You're already on the latest version.", "Updates", wx.OK | wx.ICON_INFORMATION)
         if hasattr(self, "statusbar"):
             self.statusbar.SetStatusText("No updates available.", 0)
 
     def _on_update_check_failed(self, message, manual):
+        self.update_check_in_progress = False
         if manual:
             wx.MessageBox(message, "Update Check Failed", wx.OK | wx.ICON_ERROR)
         if hasattr(self, "statusbar"):
             self.statusbar.SetStatusText("Update check failed.", 0)
 
     def _prompt_update(self, info):
-        message = f"A new version of {APP_NAME} is available.\n\n{updater.build_update_prompt(info)}"
-        if wx.MessageBox(message, "Update Available", wx.YES_NO | wx.ICON_INFORMATION) != wx.YES:
-            if hasattr(self, "statusbar"):
-                self.statusbar.SetStatusText("Update postponed.", 0)
-            return
-        self._start_update_install(info)
+        try:
+            message = f"A new version of {APP_NAME} is available.\n\n{updater.build_update_prompt(info)}"
+            if wx.MessageBox(message, "Update Available", wx.YES_NO | wx.ICON_INFORMATION) != wx.YES:
+                if hasattr(self, "statusbar"):
+                    self.statusbar.SetStatusText("Update postponed.", 0)
+                return
+            self._start_update_install(info)
+        finally:
+            self.update_check_in_progress = False
 
     def _start_update_install(self, info):
         if self.update_install_in_progress:
@@ -2710,73 +2761,17 @@ class MainFrame(wx.Frame):
         self.thread_pool.submit(self._perform_update_background, info, install_dir)
 
     def _perform_update_background(self, info, install_dir):
-        try:
-            parent_dir = os.path.dirname(install_dir)
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            staging_root = os.path.join(parent_dir, f"{APP_NAME}_Update_{timestamp}")
-            os.makedirs(staging_root, exist_ok=True)
+        ok, message = updater.download_and_apply_update(info, install_dir)
+        if ok:
+            wx.CallAfter(self._on_update_started, message)
+        else:
+            wx.CallAfter(self._on_update_failed, message)
 
-            zip_name = str(info.manifest.get("asset_filename") or f"{APP_NAME}-v{info.latest_version}.zip")
-            zip_path = os.path.join(staging_root, zip_name)
-            updater.download_file(str(info.manifest.get("download_url")), zip_path)
-
-            expected = str(info.manifest.get("sha256", "")).lower()
-            actual = updater.compute_sha256(zip_path).lower()
-            if expected != actual:
-                raise updater.UpdateError("Downloaded update failed SHA-256 verification.")
-
-            updater.extract_zip(zip_path, staging_root)
-            new_dir = updater.find_app_dir(staging_root)
-            if not new_dir:
-                raise updater.UpdateError("Extracted update does not contain application files.")
-            new_exe = os.path.join(new_dir, updater.APP_EXE_NAME)
-            if not os.path.isfile(new_exe):
-                raise updater.UpdateError("Updated executable not found.")
-
-            updater.verify_authenticode(new_exe, updater.get_allowed_thumbprints(info.manifest))
-
-            helper_src = os.path.join(new_dir, "update_helper.bat")
-            if not os.path.isfile(helper_src):
-                helper_src = os.path.join(install_dir, "update_helper.bat")
-            
-            if not os.path.isfile(helper_src):
-                raise updater.UpdateError("Update helper script not found.")
-            helper_copy = os.path.join(staging_root, "update_helper.bat")
-            shutil.copy2(helper_src, helper_copy)
-
-            # Create a simple batch launcher for the update
-            bat_launcher = os.path.join(staging_root, "launch_update.bat")
-            bat_content = f'@echo off\ncall "{helper_copy}" {os.getpid()} "{install_dir}" "{new_dir}" "{updater.APP_EXE_NAME}"\n'
-            with open(bat_launcher, "w") as f:
-                f.write(bat_content)
-            
-            # Create a VBScript to run the batch file invisibly
-            vbs_launcher = os.path.join(staging_root, "launch_update.vbs")
-            vbs_content = f'CreateObject("WScript.Shell").Run Chr(34) & "{bat_launcher}" & Chr(34), 0, False\n'
-            with open(vbs_launcher, "w") as f:
-                f.write(vbs_content)
-            
-            # Launch VBScript with hidden window
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = 0  # SW_HIDE
-            
-            flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-            subprocess.Popen(
-                ["wscript.exe", "//nologo", vbs_launcher],
-                creationflags=flags,
-                startupinfo=startupinfo,
-                cwd=parent_dir
-            )
-            wx.CallAfter(self._on_update_started)
-        except Exception as e:
-            wx.CallAfter(self._on_update_failed, str(e))
-
-    def _on_update_started(self):
+    def _on_update_started(self, message="Update prepared. The app will restart after it exits."):
         if hasattr(self, "statusbar"):
             self.statusbar.SetStatusText("Applying update...", 0)
         wx.MessageBox(
-            "The update has been downloaded and verified. The app will now close to install it.",
+            f"{message}\n\nThe app will now close to install it.",
             "Updating",
             wx.OK | wx.ICON_INFORMATION,
         )
@@ -2803,6 +2798,8 @@ class MainFrame(wx.Frame):
 
     def _prepare_auto_start(self):
         if not self.client:
+            return
+        if not self.config_manager.get_preferences().get('auto_start', True):
             return
 
         self.pending_add_baseline = set(self.known_hashes)
@@ -2851,7 +2848,7 @@ class MainFrame(wx.Frame):
         generation = self.client_generation
         client = self.client
 
-        if arg.startswith("magnet:"):
+        if arg.lower().startswith("magnet:"):
             self._prepare_auto_start()
             hash_hint = self._maybe_hash_from_magnet(arg)
             if hash_hint:
@@ -3062,6 +3059,7 @@ class MainFrame(wx.Frame):
 
         # Reset state before connecting
         self.timer.Stop()
+        self.refreshing = False
         self.connected = False
         self.client = None
         self.all_torrents = []
@@ -3389,7 +3387,7 @@ class MainFrame(wx.Frame):
                 try:
                     default_path = self._get_default_save_path()
 
-                    if url.startswith("magnet:"):
+                    if url.lower().startswith("magnet:"):
                         adlg = AddTorrentDialog(self, "Magnet Link", None, default_path)
                         if adlg.ShowModal() == wx.ID_OK:
                             save_path = adlg.get_selected_path() or None
@@ -3811,7 +3809,7 @@ class MainFrame(wx.Frame):
         hashes = self.torrent_list.get_selected_hashes()
         if hashes and wx.MessageBox(f"Remove {len(hashes)} torrents?", "Confirm", wx.YES_NO) == wx.YES:
             self.statusbar.SetStatusText("Removing torrents...", 0)
-            self.thread_pool.submit(self._remove_background, hashes, False)
+            self.thread_pool.submit(self._remove_background, self.client, self.client_generation, hashes, False)
             
     def on_remove_data(self, event):
         hashes = self.torrent_list.get_selected_hashes()
@@ -3822,21 +3820,28 @@ class MainFrame(wx.Frame):
         if wx.MessageBox(f"Remove {count} {label} AND DATA?", "Confirm", wx.YES_NO | wx.ICON_WARNING) != wx.YES:
             return
         self.statusbar.SetStatusText("Removing torrents and data...", 0)
-        self.thread_pool.submit(self._remove_background, hashes, True)
+        self.thread_pool.submit(self._remove_background, self.client, self.client_generation, hashes, True)
 
-    def _remove_background(self, hashes, with_data):
+    def _remove_background(self, client, generation, hashes, with_data):
         try:
-            if hasattr(self.client, 'remove_torrents'):
-                self.client.remove_torrents(hashes, with_data)
+            if generation != self.client_generation:
+                return
+            if not client:
+                raise RuntimeError("No client connected.")
+            if hasattr(client, 'remove_torrents'):
+                client.remove_torrents(hashes, with_data)
             else:
                 for h in hashes:
                     if with_data:
-                        self.client.remove_torrent_with_data(h)
+                        client.remove_torrent_with_data(h)
                     else:
-                        self.client.remove_torrent(h)
+                        client.remove_torrent(h)
+            if generation != self.client_generation:
+                return
             wx.CallAfter(self._on_action_complete, "Removed torrents")
         except Exception as e:
-            wx.CallAfter(self._on_action_error, f"Remove failed: {e}")
+            if generation == self.client_generation:
+                wx.CallAfter(self._on_action_error, f"Remove failed: {e}")
 
     def _on_action_complete(self, msg):
         self.statusbar.SetStatusText(msg, 0)
@@ -3948,6 +3953,7 @@ if __name__ == "__main__":
         print("Starting application...")
         app = wx.App(False) # False = don't redirect stdout/stderr to window
         print("wx.App initialized.")
+        updater.cleanup_update_artifacts()
 
         # Single Instance Check
         name = f"SerrebiTorrent-{wx.GetUserId()}"

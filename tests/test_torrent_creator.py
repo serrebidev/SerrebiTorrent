@@ -109,6 +109,31 @@ def test_include_torrent_path_rejects_symlink():
         assert torrent_creator._include_torrent_path(link) is False
 
 
+def test_auto_output_path_defaults_beside_selected_file(tmp_path):
+    src = tmp_path / "payload.txt"
+    expected = tmp_path / "payload.txt.torrent"
+
+    actual = torrent_creator.CreateTorrentDialog._auto_output_path(None, str(src))
+
+    assert os.path.normcase(actual) == os.path.normcase(str(expected))
+
+
+def test_auto_output_path_defaults_beside_selected_folder(tmp_path):
+    src = tmp_path / "payload"
+    expected = tmp_path / "payload.torrent"
+
+    actual = torrent_creator.CreateTorrentDialog._auto_output_path(None, str(src))
+
+    assert os.path.normcase(actual) == os.path.normcase(str(expected))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows root path handling")
+def test_piece_hash_base_path_preserves_drive_and_unc_roots():
+    assert torrent_creator._piece_hash_base_path("C:\\") == os.path.abspath("C:\\")
+    assert torrent_creator._piece_hash_base_path("\\\\server\\share\\") == os.path.abspath("\\\\server\\share\\")
+    assert torrent_creator._piece_hash_base_path("\\\\server\\share\\payload") == os.path.abspath("\\\\server\\share\\")
+
+
 @pytest.mark.skipif(torrent_creator.lt is None, reason="libtorrent not installed")
 def test_create_torrent_bytes_missing_path():
     with pytest.raises(FileNotFoundError):

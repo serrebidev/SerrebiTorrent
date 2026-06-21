@@ -49,6 +49,22 @@ def _listen_port(value, default=6881):
     return default
 
 
+def _flush_resume_flag():
+    try:
+        return lt.save_resume_flags_t.flush_disk_cache
+    except AttributeError:
+        return lt.resume_data_flags_t.flush_disk_cache
+
+
+def _write_resume_data_bytes(params):
+    if hasattr(lt, "write_resume_data_buf"):
+        return lt.write_resume_data_buf(params)
+    data = lt.write_resume_data(params)
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        return bytes(data)
+    return lt.bencode(data)
+
+
 class SessionManager:
     _instance = None
     
@@ -351,15 +367,25 @@ class SessionManager:
             ih = self._info_hash_key(alert.params.info_hashes)
             if not ih:
                 return
-            self.pending_saves.discard(ih)
             
             path = os.path.join(self.state_dir, ih + '.resume')
+            tmp = f"{path}.{os.getpid()}.tmp"
             
-            # Serialize add_torrent_params
-            # lt.write_resume_data(add_torrent_params) -> bencoded bytes
-            data = lt.write_resume_data(alert.params)
-            with open(path, 'wb') as f:
-                f.write(data)
+            data = _write_resume_data_bytes(alert.params)
+            try:
+                os.makedirs(self.state_dir, exist_ok=True)
+                with open(tmp, 'wb') as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+                self.pending_saves.discard(ih)
+            finally:
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
                 
             # Update DB with current save path from params if available
             # This ensures we have the latest path even if user moved it (though move is not fully implemented yet)
@@ -415,7 +441,15 @@ class SessionManager:
                 except OSError:
                     pass
 
-            self.ses.add_torrent(params)
+            try:
+                self.ses.add_torrent(params)
+            except Exception:
+                try:
+                    if os.path.exists(tpath):
+                        os.remove(tpath)
+                except OSError:
+                    pass
+                raise
 
             if ih:
                 entry = {'save_path': save_path, 'added': time.time()}
@@ -612,7 +646,7 @@ class SessionManager:
                 if callable(need_resume) and not need_resume():
                     continue
                 try:
-                    h.save_resume_data(lt.resume_data_flags_t.flush_disk_cache)
+                    h.save_resume_data(_flush_resume_flag())
                 except Exception as e:
                     print(f"Error requesting resume data for {ih}: {e}")
                     continue
@@ -679,6 +713,21 @@ class SessionManager:
                 keys.append(key)
         if not keys:
             return
+
+        with self.lock:
+            expanded = list(keys)
+            for db_key, entry in list(self.torrents_db.items()):
+                aliases = {self._hash_object_key(db_key)}
+                if isinstance(entry, dict):
+                    stored_hashes = entry.get("hashes")
+                    if isinstance(stored_hashes, dict):
+                        aliases.update(self._hash_object_key(value) for value in stored_hashes.values())
+                aliases.discard("")
+                if aliases and any(key in aliases for key in keys):
+                    for alias in aliases:
+                        if alias not in expanded:
+                            expanded.append(alias)
+            keys = expanded
 
         for key in keys:
             for suffix in ('.torrent', '.resume'):

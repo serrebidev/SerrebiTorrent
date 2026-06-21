@@ -2,37 +2,117 @@
 
 import abc
 import binascii
+import ipaddress
 import os
-from urllib.parse import quote, urlparse, urlunparse
+import re
+import socket
+from urllib.parse import quote, urljoin, urlparse, urlunparse
 
 import requests
 from torrent_parsing import build_magnet_from_hashes
 
 MAX_TORRENT_DOWNLOAD_BYTES = 64 * 1024 * 1024
+MAX_TORRENT_URL_REDIRECTS = 5
+_PERCENT_ESCAPE_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
+def _quote_path_preserving_escapes(path):
+    parts = []
+    pos = 0
+    for match in _PERCENT_ESCAPE_RE.finditer(path):
+        parts.append(quote(path[pos:match.start()], safe='/:@'))
+        parts.append(match.group(0))
+        pos = match.end()
+    parts.append(quote(path[pos:], safe='/:@'))
+    return "".join(parts)
 
 
 def safe_encode_url(url):
     """Encode special characters (like brackets) in URL path for requests compatibility."""
     parsed = urlparse(url)
-    # Encode the path, preserving slashes
-    encoded_path = quote(parsed.path, safe='/:@')
+    encoded_path = _quote_path_preserving_escapes(parsed.path)
     return urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
 
 
-def download_torrent_url(url, timeout=30):
+def _is_blocked_torrent_ip(ip):
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    )
+
+
+def _resolve_torrent_host(host, port):
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError("Torrent URL host could not be resolved.") from exc
+    addresses = []
+    for info in infos:
+        try:
+            addresses.append(ipaddress.ip_address(info[4][0]))
+        except (IndexError, ValueError):
+            continue
+    if not addresses:
+        raise ValueError("Torrent URL host did not resolve to an IP address.")
+    return tuple(addresses)
+
+
+def validate_public_torrent_url(url):
     parsed = urlparse(url)
     if parsed.scheme.lower() not in ("http", "https"):
         raise ValueError("Torrent URL must use http or https.")
-    content = b""
-    with requests.get(safe_encode_url(url), timeout=timeout, stream=True) as r:
-        r.raise_for_status()
-        for chunk in r.iter_content(1024 * 1024):
-            if not chunk:
+    host = parsed.hostname
+    if not host:
+        raise ValueError("Torrent URL host is required.")
+    host_check = host.rstrip(".").lower()
+    if host_check == "localhost" or host_check.endswith(".localhost"):
+        raise ValueError("Localhost torrent URLs are not allowed.")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Torrent URL port is invalid.") from exc
+    if port is None:
+        port = 443 if parsed.scheme.lower() == "https" else 80
+    try:
+        addresses = (ipaddress.ip_address(host_check),)
+    except ValueError:
+        addresses = _resolve_torrent_host(host_check, port)
+    if any(_is_blocked_torrent_ip(ip) for ip in addresses):
+        raise ValueError("Private or local network torrent URLs are not allowed.")
+    return parsed
+
+
+def download_torrent_url(url, timeout=30):
+    current = url
+    for _ in range(MAX_TORRENT_URL_REDIRECTS + 1):
+        validate_public_torrent_url(current)
+        content = b""
+        with requests.get(safe_encode_url(current), timeout=timeout, stream=True, allow_redirects=False) as r:
+            if r.status_code in _REDIRECT_STATUSES:
+                location = r.headers.get("Location")
+                if not location:
+                    raise ValueError("Torrent URL redirect missing Location header.")
+                current = urljoin(current, location)
                 continue
-            content += chunk
-            if len(content) > MAX_TORRENT_DOWNLOAD_BYTES:
-                raise ValueError("Torrent download exceeds 64 MB limit.")
-    return content
+            r.raise_for_status()
+            for chunk in r.iter_content(1024 * 1024):
+                if not chunk:
+                    continue
+                content += chunk
+                if len(content) > MAX_TORRENT_DOWNLOAD_BYTES:
+                    raise ValueError("Torrent download exceeds 64 MB limit.")
+        return content
+    raise ValueError("Torrent URL redirected too many times.")
+
 
 from libtorrent_env import prepare_libtorrent_dlls
 
@@ -196,7 +276,6 @@ _defusedxml_xmlrpc_monkey_patch()
 
 import xmlrpc.client  # nosec B411
 import io
-import socket
 import ssl
 
 class CookieTransport(xmlrpc.client.SafeTransport):
@@ -284,7 +363,7 @@ class RTorrentClient(BaseClient):
         else:
             self.srv = xmlrpc.client.ServerProxy(u, context=self.ctx)
 
-    def _rpc(self, name, *args, default=None):
+    def _rpc(self, name, *args, default=None, suppress_errors=True):
         try:
             return getattr(self.srv, name)(*args)
         except xmlrpc.client.Fault as e:
@@ -292,6 +371,8 @@ class RTorrentClient(BaseClient):
             print(f"rTorrent RPC Fault in {name}: {e}")
             raise
         except Exception:
+            if not suppress_errors:
+                raise
             return default
 
     def test_connection(self):
@@ -338,7 +419,7 @@ class RTorrentClient(BaseClient):
         self.srv.d.erase(h)
 
     def remove_torrent_with_data(self, h):
-        self.srv.d.erase(h)
+        raise NotImplementedError("rTorrent delete-with-data is not supported safely.")
 
     def add_torrent_url(self, u, sp=None):
         if sp:
@@ -407,7 +488,7 @@ class RTorrentClient(BaseClient):
                 continue
             if key in ("pex_enabled", "use_udp_trackers", "check_hash"):
                 val = 1 if bool(val) else 0
-            self._rpc(method, val)
+            self._rpc(method, val, suppress_errors=False)
 
     def recheck_torrent(self, h):
         self.srv.d.check_hash(h)
@@ -459,15 +540,21 @@ class QBittorrentClient(BaseClient):
             res = []
             for t in ts:
                 sv, av, hv = 0, 0, 0
-                s = t.state
-                if s in ['downloading', 'uploading', 'stalledDL', 'stalledUP', 'metaDL', 'forcedDL', 'forcedUP', 'queuedDL', 'queuedUP']:
+                s = str(t.state or "")
+                state_key = s.lower()
+                if state_key in ['downloading', 'uploading', 'stalleddl', 'stalledup', 'metadl', 'forcedmetadl', 'forceddl', 'forcedup', 'queueddl', 'queuedup']:
                     sv, av = 1, 1
-                elif s in ['pausedDL', 'pausedUP']:
+                elif state_key in ['pauseddl', 'pausedup', 'stoppeddl', 'stoppedup']:
                     sv = 0
-                elif 'checking' in s:
+                elif 'checking' in state_key:
                     hv, sv = 1, 1
+                message = ""
+                if state_key == "error":
+                    message = "Error"
+                elif state_key == "missingfiles":
+                    message = "Missing files"
                 tracker_domain = _safe_tracker_domain(getattr(t, "tracker", "") or "")
-                res.append({"hash": t.hash, "name": t.name, "size": t.total_size, "done": t.completed, "up_total": t.uploaded, "ratio": t.ratio * 1000, "state": sv, "active": av, "hashing": hv, "message": "", "down_rate": t.dlspeed, "up_rate": t.upspeed, "tracker_domain": tracker_domain, "eta": int(getattr(t, "eta", -1) or -1), "seeds_connected": int(getattr(t, "num_seeds", 0) or 0), "seeds_total": int(getattr(t, "num_complete", 0) or 0), "leechers_connected": int(getattr(t, "num_leechs", 0) or 0), "leechers_total": int(getattr(t, "num_incomplete", 0) or 0), "availability": getattr(t, "availability", None), "save_path": getattr(t, "save_path", None)})
+                res.append({"hash": t.hash, "name": t.name, "size": t.total_size, "done": t.completed, "up_total": t.uploaded, "ratio": t.ratio * 1000, "state": sv, "active": av, "hashing": hv, "message": message, "down_rate": t.dlspeed, "up_rate": t.upspeed, "tracker_domain": tracker_domain, "eta": int(getattr(t, "eta", -1) or -1), "seeds_connected": int(getattr(t, "num_seeds", 0) or 0), "seeds_total": int(getattr(t, "num_complete", 0) or 0), "leechers_connected": int(getattr(t, "num_leechs", 0) or 0), "leechers_total": int(getattr(t, "num_incomplete", 0) or 0), "availability": getattr(t, "availability", None), "save_path": getattr(t, "save_path", None)})
             return res
         except Exception as e:
             print(f"qBittorrent error: {e}")
@@ -524,46 +611,126 @@ class QBittorrentClient(BaseClient):
 # --- Trans ---
 from transmission_rpc import Client as TransClient
 class TransmissionClient(BaseClient):
+    DEFAULT_RPC_PATH = "/transmission/rpc"
+    DEFAULT_PORT = 9091
+
     def __init__(self, u, us, pw):
         if not u.startswith(('http://', 'https://')):
             u = 'http://' + u
         p = urlparse(u)
-        self.c = TransClient(host=p.hostname, port=p.port, username=us, password=pw, protocol=p.scheme)
+        username = us if us not in (None, "") else p.username
+        password = pw if pw not in (None, "") else p.password
+        self.c = TransClient(
+            host=p.hostname or "127.0.0.1",
+            port=p.port or self.DEFAULT_PORT,
+            username=username,
+            password=password,
+            protocol=p.scheme,
+            path=p.path or self.DEFAULT_RPC_PATH,
+        )
+
     def test_connection(self): return self.c.server_version
+
+    def _field(self, obj, *names, default=None):
+        for name in names:
+            if isinstance(obj, dict) and name in obj:
+                value = obj[name]
+                if value is not None:
+                    return value
+                continue
+            try:
+                value = getattr(obj, name)
+            except Exception:
+                pass
+            else:
+                if value is not None:
+                    return value
+        return default
+
+    def _collection(self, value):
+        if value is None or isinstance(value, (str, bytes, bytearray)):
+            return []
+        if isinstance(value, dict):
+            return list(value.values())
+        return list(value)
+
+    def _int(self, value, default=0):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _float(self, value, default=0.0):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _bool(self, value, default=False):
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "y", "on")
+        return bool(value)
+
+    def _eta_seconds(self, value):
+        if value is None or value == "":
+            return -1
+        if hasattr(value, "total_seconds"):
+            try:
+                return int(value.total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                return -1
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1
+
+    def _first_tracker_url(self, t):
+        for tracker in self._collection(self._field(t, "trackers", default=[])):
+            announce = self._field(tracker, "announce", "url", default="")
+            if announce:
+                return announce
+        return ""
+
     def _swarm_counts(self, t):
         """Best-available swarm seed/leecher totals from tracker scrape stats."""
         seeds = leechers = 0
         try:
-            for s in (getattr(t, "tracker_stats", None) or []):
-                sc = getattr(s, "seeder_count", -1)
-                lc = getattr(s, "leecher_count", -1)
-                if sc and sc > seeds:
+            for s in self._collection(self._field(t, "tracker_stats", "trackerStats", default=[])):
+                sc = self._int(self._field(s, "seeder_count", "seederCount", default=-1), -1)
+                lc = self._int(self._field(s, "leecher_count", "leecherCount", default=-1), -1)
+                if sc >= 0 and sc > seeds:
                     seeds = sc
-                if lc and lc > leechers:
+                if lc >= 0 and lc > leechers:
                     leechers = lc
         except Exception:
             pass
         return seeds, leechers
+
     def get_torrents_full(self):
         try:
             ts = self.c.get_torrents()
             res = []
             for t in ts:
                 sv, av, hv = 0, 0, 0
-                if t.status == 'stopped':
+                status = self._field(t, "status", default="")
+                if status == 'stopped':
                     sv = 0
-                elif t.status in ['checking', 'check pending']:
+                elif status in ['checking', 'check pending']:
                     hv, sv = 1, 1
                 else:
                     sv, av = 1, 1
-                tracker_url = t.trackers[0].announce if t.trackers else ""
+                tracker_url = self._first_tracker_url(t)
                 tracker_domain = _safe_tracker_domain(tracker_url)
                 seeds_total, leechers_total = self._swarm_counts(t)
-                res.append({"hash": t.hashString, "name": t.name, "size": t.total_size, "done": t.downloaded_ever, "up_total": t.uploaded_ever, "ratio": t.ratio * 1000, "state": sv, "active": av, "hashing": hv, "message": t.error_string, "down_rate": t.rate_download, "up_rate": t.rate_upload, "tracker_domain": tracker_domain, "eta": int(getattr(t, "eta", -1) or -1), "seeds_connected": getattr(t, "peers_sending_to_us", 0), "seeds_total": seeds_total, "leechers_connected": getattr(t, "peers_getting_from_us", 0), "leechers_total": leechers_total, "availability": None, "save_path": getattr(t, "download_dir", None)})
+                ratio = self._float(self._field(t, "ratio", default=0.0)) * 1000
+                res.append({"hash": self._field(t, "hash_string", "hashString", "hash", default=""), "name": self._field(t, "name", default=""), "size": self._int(self._field(t, "total_size", "totalSize", default=0)), "done": self._int(self._field(t, "downloaded_ever", "downloadedEver", default=0)), "up_total": self._int(self._field(t, "uploaded_ever", "uploadedEver", default=0)), "ratio": ratio, "state": sv, "active": av, "hashing": hv, "message": self._field(t, "error_string", "errorString", default=""), "down_rate": self._int(self._field(t, "rate_download", "rateDownload", default=0)), "up_rate": self._int(self._field(t, "rate_upload", "rateUpload", default=0)), "tracker_domain": tracker_domain, "eta": self._eta_seconds(self._field(t, "eta", default=-1)), "seeds_connected": self._int(self._field(t, "peers_sending_to_us", "peersSendingToUs", default=0)), "seeds_total": seeds_total, "leechers_connected": self._int(self._field(t, "peers_getting_from_us", "peersGettingFromUs", default=0)), "leechers_total": leechers_total, "availability": None, "save_path": self._field(t, "download_dir", "downloadDir", default=None)})
             return res
         except Exception as e:
             print(f"Transmission error: {e}")
             return []
+
     def start_torrent(self, h): self.c.start_torrent(h)
     def stop_torrent(self, h): self.c.stop_torrent(h)
     def remove_torrent(self, h): self.c.remove_torrent(h, delete_data=False)
@@ -646,14 +813,26 @@ class TransmissionClient(BaseClient):
             self.c.set_session(**mapping)
     def get_torrent_save_path(self, h):
         t = self.c.get_torrent(h)
-        return getattr(t, 'download_dir', None) or getattr(t, 'downloadDir', None)
+        return self._field(t, 'download_dir', 'downloadDir', default=None)
+
     def get_files(self, h):
         t = self.c.get_torrent(h, arguments=['files', 'fileStats'])
         res = []
-        for i, f in enumerate(t.files):
-            s = t.fileStats[i]
-            res.append({"index": i, "name": f.name, "size": f.length, "progress": f.bytesCompleted/f.length if f.length>0 else 0, "priority": 0 if not s.wanted else (2 if s.priority>0 else 1)})
+        files = self._collection(self._field(t, "files", default=[]))
+        file_stats = self._collection(self._field(t, "file_stats", "fileStats", default=[]))
+        for i, f in enumerate(files):
+            s = file_stats[i] if i < len(file_stats) else {}
+            size = self._int(self._field(f, "length", "size", default=0))
+            completed = self._int(self._field(f, "bytes_completed", "bytesCompleted", default=0))
+            wanted = self._bool(self._field(s, "wanted", default=True), True)
+            priority_value = self._field(s, "priority", default=0)
+            if isinstance(priority_value, str):
+                priority = 2 if priority_value.strip().lower() == "high" else 1
+            else:
+                priority = 2 if self._int(priority_value) > 0 else 1
+            res.append({"index": i, "name": self._field(f, "name", "filename", default=""), "size": size, "progress": completed/size if size>0 else 0, "priority": priority if wanted else 0})
         return res
+
     def set_file_priority(self, h, i, p):
         args = {}
         if p == 0:
@@ -662,12 +841,26 @@ class TransmissionClient(BaseClient):
             args['files_wanted'] = [i]
             args['priority_high' if p == 2 else 'priority_normal'] = [i]
         self.c.change_torrent(h, **args)
+
     def get_peers(self, h):
         t = self.c.get_torrent(h, arguments=['peers'])
-        return [{"address": f"{p.address}:{p.port}", "client": p.clientName or '?', "progress": p.progress or 0, "down_rate": p.rateToClient or 0, "up_rate": p.rateFromClient or 0} for p in t.peers]
+        raw_peers = self._field(t, "peers", default=[])
+        peer_items = raw_peers.items() if isinstance(raw_peers, dict) else [(None, p) for p in (raw_peers or [])]
+        res = []
+        for key, p in peer_items:
+            address = self._field(p, "address", default="")
+            port = self._field(p, "port", default=None)
+            if address and port not in (None, ""):
+                address = f"{address}:{port}"
+            elif not address and key is not None:
+                address = str(key)
+            res.append({"address": address, "client": self._field(p, "client_name", "clientName", "client", default="?") or "?", "progress": self._float(self._field(p, "progress", default=0)), "down_rate": self._int(self._field(p, "rate_to_client", "rateToClient", "dl_speed", default=0)), "up_rate": self._int(self._field(p, "rate_from_client", "rateFromClient", "up_speed", default=0))})
+        return res
+
     def get_trackers(self, h):
         t = self.c.get_torrent(h, arguments=['trackerStats'])
-        return [{"url": s.announce, "status": "Active" if s.hasAnnounced else "?", "peers": s.peerCount or 0, "message": s.lastAnnounceResult or ''} for s in t.trackerStats]
+        stats = self._collection(self._field(t, "tracker_stats", "trackerStats", default=[]))
+        return [{"url": self._field(s, "announce", "url", default=""), "status": "Active" if self._bool(self._field(s, "has_announced", "hasAnnounced", default=False)) else "?", "peers": self._int(self._field(s, "peer_count", "peerCount", default=0)), "message": self._field(s, "last_announce_result", "lastAnnounceResult", default="") or ''} for s in stats]
 
 # --- Local ---
 prepare_libtorrent_dlls()
@@ -762,7 +955,7 @@ class LocalClient(BaseClient):
     def remove_torrent_with_data(self, h): self.m.remove_torrent(h, True)
     def add_torrent_url(self, u, sp=None):
         fp = sp or self._edp()
-        if u.startswith("magnet:"):
+        if u.lower().startswith("magnet:"):
             self.m.add_magnet(u, fp)
         else:
             self.m.add_torrent_file(download_torrent_url(u), fp)

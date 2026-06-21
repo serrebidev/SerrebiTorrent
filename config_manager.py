@@ -90,6 +90,21 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
+def _ensure_valid_default_profile(cfg: Dict[str, Any]) -> None:
+    profiles = cfg.get("profiles")
+    if not isinstance(profiles, dict):
+        profiles = {}
+        cfg["profiles"] = profiles
+
+    default_profile = str(cfg.get("default_profile") or "")
+    if profiles:
+        if default_profile not in profiles:
+            default_profile = next(iter(profiles))
+    else:
+        default_profile = ""
+    cfg["default_profile"] = default_profile
+
+
 class ConfigManager:
     def __init__(self) -> None:
         self.lock = threading.RLock()
@@ -108,7 +123,7 @@ class ConfigManager:
         if not isinstance(profiles, dict):
             cfg["profiles"] = {}
 
-        cfg.setdefault("default_profile", "")
+        _ensure_valid_default_profile(cfg)
         return cfg
 
     def load_config(self) -> Dict[str, Any]:
@@ -197,6 +212,7 @@ class ConfigManager:
                 "user": user,
                 "password": password,
             }
+            _ensure_valid_default_profile(self.config)
             self.save_config()
         return pid
 
@@ -218,8 +234,7 @@ class ConfigManager:
         with self.lock:
             if pid in self.get_profiles():
                 del self.config["profiles"][pid]
-                if self.config.get("default_profile") == pid:
-                    self.config["default_profile"] = ""
+                _ensure_valid_default_profile(self.config)
                 self.save_config()
 
     def get_default_profile_id(self) -> str:
@@ -229,6 +244,7 @@ class ConfigManager:
     def set_default_profile_id(self, pid: str) -> None:
         with self.lock:
             self.config["default_profile"] = pid
+            _ensure_valid_default_profile(self.config)
             self.save_config()
 
     def get_profile(self, pid: str):

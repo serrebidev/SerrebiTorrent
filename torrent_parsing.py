@@ -82,6 +82,31 @@ def btmh_from_v2_hash(value) -> Optional[str]:
     return f"1220{v2_hash}" if v2_hash else None
 
 
+def clean_tracker_urls(trackers) -> list[str]:
+    """Return stripped tracker URLs, de-duplicated while preserving order."""
+    if trackers is None:
+        return []
+    if isinstance(trackers, (str, bytes, bytearray)):
+        candidates = [trackers]
+    else:
+        candidates = trackers
+
+    cleaned: list[str] = []
+    seen = set()
+    for tracker in candidates:
+        if isinstance(tracker, (bytes, bytearray, memoryview)):
+            text = bytes(tracker).decode("utf-8", "ignore")
+        else:
+            text = str(tracker)
+        for line in text.splitlines() or [text]:
+            value = line.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            cleaned.append(value)
+    return cleaned
+
+
 def build_magnet_from_hashes(v1_hash=None, v2_hash=None, display_name=None, trackers=None) -> str:
     params = []
     v1 = normalize_info_hash(v1_hash)
@@ -98,9 +123,8 @@ def build_magnet_from_hashes(v1_hash=None, v2_hash=None, display_name=None, trac
         return ""
     if display_name:
         params.append(("dn", str(display_name)))
-    for tracker in trackers or []:
-        if tracker:
-            params.append(("tr", str(tracker)))
+    for tracker in clean_tracker_urls(trackers):
+        params.append(("tr", tracker))
     return "magnet:?" + urlencode(params)
 
 
@@ -110,7 +134,10 @@ def parse_magnet_infohash(url: str) -> Optional[str]:
         return None
 
     try:
+        url = str(url).strip()
         parsed = urlparse(url)
+        if parsed.scheme.lower() != "magnet":
+            return None
         qs = parse_qs(parsed.query)
         xts = []
         for key, values in qs.items():

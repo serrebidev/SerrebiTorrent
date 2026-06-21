@@ -11,7 +11,7 @@ from libtorrent_env import prepare_libtorrent_dlls
 prepare_libtorrent_dlls()
 
 import qbittorrentapi
-from clients import RTorrentClient
+from clients import RTorrentClient, TransmissionClient
 from config_manager import ConfigManager
 
 def format_size(bytes_size):
@@ -24,6 +24,10 @@ def format_size(bytes_size):
 
 def format_time(seconds):
     """Format seconds to time string."""
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        seconds = -1
     if seconds == -1 or seconds == 8640000:  # qBit infinite
         return "∞"
     days = seconds // 86400
@@ -41,27 +45,80 @@ def format_time(seconds):
 
 def get_status(t):
     """Get status string from torrent."""
-    state = t.state
-    if state in ['downloading', 'metaDL', 'forcedDL']:
+    state = str(t.state or "")
+    state_key = state.lower()
+    if state_key in ['downloading', 'metadl', 'forcedmetadl', 'forceddl']:
         return "Downloading"
-    elif state in ['uploading', 'forcedUP']:
+    elif state_key in ['uploading', 'forcedup']:
         return "Seeding"
-    elif state in ['pausedDL', 'pausedUP']:
+    elif state_key in ['pauseddl', 'pausedup', 'stoppeddl', 'stoppedup']:
         return "Paused"
-    elif 'checking' in state:
+    elif 'checking' in state_key:
         return "Checking"
-    elif state in ['stalledDL', 'stalledUP']:
+    elif state_key in ['stalleddl', 'stalledup']:
         return "Stalled"
-    elif state == 'queuedDL':
+    elif state_key == 'queueddl':
         return "Queued DL"
-    elif state == 'queuedUP':
+    elif state_key == 'queuedup':
         return "Queued UP"
-    elif state == 'allocating':
+    elif state_key == 'allocating':
         return "Allocating"
-    elif state == 'moving':
+    elif state_key == 'moving':
         return "Moving"
+    elif state_key in ['error', 'missingfiles']:
+        return "Failed"
     else:
         return state.capitalize()
+
+def _message_indicates_error(message):
+    """Mirror main.clean_status_message: ignore benign 'no error' strings.
+
+    Some backends surface localized Windows success strings (e.g. "The operation
+    completed successfully.") in the error field for perfectly healthy torrents;
+    treating those as failures would mislabel seeding/downloading rows.
+    """
+    low = str(message or "").strip().lower()
+    if not low or low in ("success", "ok", "no error", "none"):
+        return False
+    if low.rstrip(".").strip() == "the operation completed successfully":
+        return False
+    if "the operation completed successfully" in low:
+        return False
+    if "the handle is invalid" in low:
+        return False
+    return True
+
+
+def get_row_status(t):
+    """Get status string from normalized client row dictionaries."""
+    state = int(t.get('state', 0) or 0)
+    hashing = int(t.get('hashing', 0) or 0)
+    message = str(t.get('message', '') or '').strip()
+    size = int(t.get('size', 0) or 0)
+    done = int(t.get('done', 0) or 0)
+    pct = (done / size * 100) if size > 0 else 0
+    if _message_indicates_error(message):
+        return "Failed"
+    if hashing:
+        return "Checking"
+    if state == 1 and pct >= 100:
+        return "Seeding"
+    if state == 1:
+        return "Downloading"
+    if state == 0:
+        return "Paused"
+    return "Unknown"
+
+def format_peer_pair(connected, total):
+    try:
+        connected = int(connected or 0)
+    except (TypeError, ValueError):
+        connected = 0
+    try:
+        total = int(total or 0)
+    except (TypeError, ValueError):
+        total = 0
+    return f"{connected}/{total}"
 
 def main():
     config = ConfigManager()
@@ -78,8 +135,8 @@ def main():
     user = profile.get('user')
     password = profile.get('password')
 
-    if client_type not in ['qbittorrent', 'rtorrent']:
-        print("Only qBittorrent and rTorrent supported.")
+    if client_type not in ['qbittorrent', 'rtorrent', 'transmission']:
+        print("Only qBittorrent, Transmission, and rTorrent supported.")
         return
 
     try:
@@ -92,6 +149,12 @@ def main():
         elif client_type == 'rtorrent':
             print(f"Connecting to rTorrent at {url}")
             client = RTorrentClient(url, user, password)
+            client.test_connection()
+            print("Connected successfully")
+            torrents = client.get_torrents_full()
+        elif client_type == 'transmission':
+            print(f"Connecting to Transmission at {url}")
+            client = TransmissionClient(url, user, password)
             client.test_connection()
             print("Connected successfully")
             torrents = client.get_torrents_full()
@@ -111,35 +174,15 @@ def main():
                 time_left = format_time(t.eta)
                 seeds = f"{t.num_seeds}/{t.num_complete}"
                 leechers = f"{t.num_leechs}/{t.num_incomplete}"
-            elif client_type == 'rtorrent':
+            elif client_type in ('rtorrent', 'transmission'):
                 name = t['name'][:50]
                 size = format_size(t['size'])
-                # Status from state and active
-                state = t['state']
-                active = t['active']
-                hashing = t['hashing']
-                if hashing:
-                    status = "Checking"
-                elif state == 1 and active == 1:
-                    status = "Downloading"
-                elif state == 1 and active == 0:
-                    status = "Seeding"
-                elif state == 0:
-                    status = "Paused"
-                else:
-                    status = "Unknown"
+                status = get_row_status(t)
                 done_percent = (t['done'] / t['size'] * 100) if t['size'] > 0 else 0
                 done_str = f"{done_percent:.1f}%"
-                # Time left
-                down_rate = t['down_rate']
-                remaining = t['size'] - t['done']
-                if down_rate > 0 and remaining > 0:
-                    time_left = format_time(remaining // down_rate)
-                else:
-                    time_left = "∞"
-                # Seeds/leechers not available in basic rTorrent, set to N/A
-                seeds = "N/A"
-                leechers = "N/A"
+                time_left = format_time(t.get('eta', -1))
+                seeds = format_peer_pair(t.get('seeds_connected'), t.get('seeds_total'))
+                leechers = format_peer_pair(t.get('leechers_connected'), t.get('leechers_total'))
 
             print(f"{name} | {size} | {status} | {done_str} | {time_left} | {seeds} | {leechers}")
 

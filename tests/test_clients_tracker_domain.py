@@ -2,14 +2,14 @@ import clients
 
 
 class FakeQbitTorrent:
-    def __init__(self, tracker):
+    def __init__(self, tracker, state="downloading"):
         self.hash = "a" * 40
         self.name = "Test"
         self.total_size = 100
         self.completed = 50
         self.uploaded = 0
         self.ratio = 0.0
-        self.state = "downloading"
+        self.state = state
         self.dlspeed = 0
         self.upspeed = 0
         self.tracker = tracker
@@ -33,6 +33,22 @@ class FakeQbittorrentApiClient:
         return [
             FakeQbitTorrent(None),
             FakeQbitTorrent("http://tracker.example/announce"),
+        ]
+
+
+class FakeQbittorrentFailureClient(FakeQbittorrentApiClient):
+    def torrents_info(self):
+        return [
+            FakeQbitTorrent(None, state="error"),
+            FakeQbitTorrent(None, state="missingFiles"),
+        ]
+
+
+class FakeQbittorrentStateClient(FakeQbittorrentApiClient):
+    def torrents_info(self):
+        return [
+            FakeQbitTorrent(None, state="forcedMetaDL"),
+            FakeQbitTorrent(None, state="stoppedDL"),
         ]
 
 
@@ -63,7 +79,7 @@ class FakeTransTorrent:
 
 
 class FakeTransClient:
-    def __init__(self, host=None, port=None, username=None, password=None, protocol=None):
+    def __init__(self, host=None, port=None, username=None, password=None, protocol=None, path=None):
         pass
 
     def get_torrents(self):
@@ -79,6 +95,25 @@ def test_qbittorrent_tracker_domain_handles_missing_tracker(monkeypatch):
     torrents = client.get_torrents_full()
     assert torrents[0]["tracker_domain"] == ""
     assert torrents[1]["tracker_domain"] == "tracker.example"
+
+
+def test_qbittorrent_error_states_surface_as_failed(monkeypatch):
+    monkeypatch.setattr(clients.qbittorrentapi, "Client", FakeQbittorrentFailureClient)
+    client = clients.QBittorrentClient("localhost", "user", "pass")
+    torrents = client.get_torrents_full()
+    assert torrents[0]["message"] == "Error"
+    assert torrents[1]["message"] == "Missing files"
+
+
+def test_qbittorrent_v5_states_are_normalized(monkeypatch):
+    monkeypatch.setattr(clients.qbittorrentapi, "Client", FakeQbittorrentStateClient)
+    client = clients.QBittorrentClient("localhost", "user", "pass")
+    torrents = client.get_torrents_full()
+
+    assert torrents[0]["state"] == 1
+    assert torrents[0]["active"] == 1
+    assert torrents[1]["state"] == 0
+    assert torrents[1]["active"] == 0
 
 
 def test_transmission_tracker_domain_handles_empty_trackers(monkeypatch):

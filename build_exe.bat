@@ -37,6 +37,7 @@ if /I "%MODE%"=="release" (
     where gh >nul 2>&1 || (echo GitHub CLI ^(gh^) not found in PATH.& goto :error)
     call :detect_github
     call :ensure_tracked_tree_clean || goto :error
+    call :ensure_packageable_untracked_clean || goto :error
     echo Fetching tags...
     git fetch --tags
     if errorlevel 1 (
@@ -224,8 +225,42 @@ if errorlevel 1 (
 )
 exit /b 0
 
+:ensure_packageable_untracked_clean
+set "FOUND_PACKAGEABLE_UNTRACKED=0"
+for /f "usebackq delims=" %%F in (`git ls-files --others --exclude-standard`) do (
+    set "UNTRACKED_PATH=%%F"
+    set "UNTRACKED_PATH=!UNTRACKED_PATH:\=/!"
+    set "IS_PACKAGEABLE=0"
+
+    if /I "!UNTRACKED_PATH!"=="SerrebiTorrent.spec" set "IS_PACKAGEABLE=1"
+    if /I "!UNTRACKED_PATH!"=="update_helper.bat" set "IS_PACKAGEABLE=1"
+    if /I "!UNTRACKED_PATH!"=="icon.ico" set "IS_PACKAGEABLE=1"
+    if /I "!UNTRACKED_PATH:~0,11!"=="web_static/" set "IS_PACKAGEABLE=1"
+    if /I "!UNTRACKED_PATH:~0,6!"=="hooks/" set "IS_PACKAGEABLE=1"
+
+    if "!UNTRACKED_PATH:/=!"=="!UNTRACKED_PATH!" (
+        if /I "!UNTRACKED_PATH:~-3!"==".py" set "IS_PACKAGEABLE=1"
+        if /I "!UNTRACKED_PATH:~-4!"==".dll" set "IS_PACKAGEABLE=1"
+        if /I "!UNTRACKED_PATH:~-4!"==".pyd" set "IS_PACKAGEABLE=1"
+    )
+
+    if "!IS_PACKAGEABLE!"=="1" (
+        if "!FOUND_PACKAGEABLE_UNTRACKED!"=="0" (
+            echo Untracked files under packageable paths can affect the release:
+        )
+        echo   %%F
+        set "FOUND_PACKAGEABLE_UNTRACKED=1"
+    )
+)
+if "!FOUND_PACKAGEABLE_UNTRACKED!"=="1" (
+    echo Add, ignore, or remove these files before release.
+    exit /b 1
+)
+exit /b 0
+
 :gh_release
 echo Creating GitHub release v%NEXT_VERSION%...
+call :delete_draft_releases || exit /b 1
 gh release create "v%NEXT_VERSION%" "%ZIP_PATH%" "%MANIFEST_PATH%" ^
     --title "V%NEXT_VERSION%" ^
     --notes-file "%RELEASE_NOTES%" ^
@@ -241,6 +276,7 @@ if errorlevel 1 (
     exit /b 1
 )
 call :delete_draft_releases || exit /b 1
+call :verify_latest_release || exit /b 1
 exit /b 0
 
 :delete_draft_releases
@@ -250,6 +286,24 @@ if errorlevel 1 (
     echo Failed to remove draft releases.
     exit /b 1
 )
+exit /b 0
+
+:verify_latest_release
+echo Verifying GitHub /releases/latest points to v%NEXT_VERSION%...
+set "API_LATEST_TAG="
+for /f "delims=" %%T in ('gh api "repos/%GITHUB_OWNER%/%GITHUB_REPO%/releases/latest" --jq ".tag_name" 2^>nul') do (
+    set "API_LATEST_TAG=%%T"
+)
+if not defined API_LATEST_TAG (
+    echo Failed to read GitHub /releases/latest for %GITHUB_OWNER%/%GITHUB_REPO%.
+    exit /b 1
+)
+if /I not "!API_LATEST_TAG!"=="v%NEXT_VERSION%" (
+    echo GitHub /releases/latest is !API_LATEST_TAG!, expected v%NEXT_VERSION%.
+    echo The updater will keep reporting the old release until this is corrected.
+    exit /b 1
+)
+echo GitHub latest release is v%NEXT_VERSION%.
 exit /b 0
 
 :detect_github

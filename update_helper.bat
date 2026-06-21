@@ -18,6 +18,8 @@ set "ARG1=%~1"
 set "ARG2=%~2"
 set "ARG3=%~3"
 set "ARG4=%~4"
+set "ARG5=%~5"
+set "ARG6=%~6"
 
 if "%ARG1%"=="" goto :usage
 if "%ARG2%"=="" goto :usage
@@ -29,6 +31,8 @@ set "INSTALL_DIR="
 set "STAGING_DIR="
 set "BACKUP_DIR="
 set "EXE_NAME="
+set "TEMP_ROOT=%ARG5%"
+set "SHOW_LOG=%ARG6%"
 
 rem findstr doesn't support "$" end-of-line anchor reliably; use a delimiter test instead.
 set "NONNUM="
@@ -59,9 +63,9 @@ if not defined SERREBITORRENT_UPDATE_HELPER_RELOCATED (
         set "TMP_HELPER=%TEMP%\SerrebiTorrent_update_helper_!HSTAMP!_!RANDOM!.bat"
         copy /Y "%~f0" "!TMP_HELPER!" >nul 2>nul
         if defined PID (
-            start "" "!TMP_HELPER!" "%PID%" "%INSTALL_DIR%" "%STAGING_DIR%" "%EXE_NAME%"
+            start "" /b cmd /d /c call "!TMP_HELPER!" "%PID%" "%INSTALL_DIR%" "%STAGING_DIR%" "%EXE_NAME%" "%TEMP_ROOT%" "%SHOW_LOG%"
         ) else (
-            start "" "!TMP_HELPER!" "%INSTALL_DIR%" "%STAGING_DIR%" "%BACKUP_DIR%" "%EXE_NAME%"
+            start "" /b cmd /d /c call "!TMP_HELPER!" "%INSTALL_DIR%" "%STAGING_DIR%" "%BACKUP_DIR%" "%EXE_NAME%" "%TEMP_ROOT%" "%SHOW_LOG%"
         )
         exit /b 0
     )
@@ -84,20 +88,11 @@ if not exist "%STAGING_DIR%" (
     exit /b 1
 )
 
-if defined PID (
-    echo [SerrebiTorrent Update] Waiting for process %PID% to exit...
-    powershell -NoProfile -InputFormat None -Command "Wait-Process -Id %PID% -ErrorAction SilentlyContinue"
-) else (
-    echo [SerrebiTorrent Update] Waiting for %EXE_NAME% to exit...
-    :wait_loop
-    tasklist /FI "IMAGENAME eq %EXE_NAME%" | find /I "%EXE_NAME%" >nul
-    if %errorlevel%==0 (
-        echo [SerrebiTorrent Update] %EXE_NAME% is still running, attempting to kill...
-        taskkill /F /IM "%EXE_NAME%" /T >nul 2>nul
-        timeout /t 2 /nobreak >nul
-        goto wait_loop
-    )
-)
+call :ensure_app_stopped
+if errorlevel 1 goto :rollback
+
+call :verify_install_unlocked
+if errorlevel 1 goto :rollback
 
 rem OneDrive Fix: don't move the root folder; move CONTENTS via robocopy /MOVE.
 rem Keep user data in place (portable mode): SerrebiTorrent_Data and any legacy config.json.
@@ -117,6 +112,11 @@ if %RC% geq 8 (
     echo [X] Backup failed with robocopy code %RC%.
     goto :rollback
 )
+call :verify_install_drained
+if errorlevel 1 (
+    echo [X] Backup did not fully move the current install.
+    goto :rollback
+)
 
 echo [SerrebiTorrent Update] Applying update...
 robocopy "%STAGING_DIR%" "%INSTALL_DIR%" /E /MOVE /R:3 /W:1 /NFL /NDL /XD SerrebiTorrent_Data .git .venv __pycache__ /XF config.json
@@ -131,6 +131,9 @@ if exist "%STAGING_DIR%" (
     rmdir /s /q "%STAGING_DIR%" >nul 2>nul
 )
 call :cleanup_staging_root "%STAGING_DIR%"
+if not "%TEMP_ROOT%"=="" (
+    call :schedule_temp_cleanup "%TEMP_ROOT%"
+)
 
 rem Handle backup cleanup based on retention policy
 set "KEEP_BACKUPS=%SERREBITORRENT_KEEP_BACKUPS%"
@@ -174,8 +177,22 @@ echo WshShell.Run Chr(34) ^& "%INSTALL_DIR%\%EXE_NAME%" ^& Chr(34), 0, False >> 
 echo Set WshShell = Nothing >> "%VBS_LAUNCHER%"
 wscript.exe //nologo "%VBS_LAUNCHER%" >nul 2>nul
 del "%VBS_LAUNCHER%" >nul 2>nul
-powershell -NoProfile -InputFormat None -Command "param([string]$log) try { Add-Type -AssemblyName PresentationFramework | Out-Null; $msg = 'SerrebiTorrent update failed.' + \"`n`n\" + 'Log file:' + \"`n\" + $log; [System.Windows.MessageBox]::Show($msg, 'SerrebiTorrent Update', 'OK', 'Error') | Out-Null } catch { }" "%LOG_FILE%" >nul 2>nul
+powershell -NoProfile -InputFormat None -Command "$log=[string]$env:LOG_FILE; try { Add-Type -AssemblyName PresentationFramework | Out-Null; $msg = 'SerrebiTorrent update failed.' + \"`n`n\" + 'Log file:' + \"`n\" + $log; [System.Windows.MessageBox]::Show($msg, 'SerrebiTorrent Update', 'OK', 'Error') | Out-Null } catch { }" >nul 2>nul
 exit /b 1
+
+:ensure_app_stopped
+echo [SerrebiTorrent Update] Waiting for process %PID% and install-owned app instances to exit...
+powershell -NoProfile -InputFormat None -Command "$ErrorActionPreference='SilentlyContinue'; $exe=[IO.Path]::GetFileNameWithoutExtension([string]$env:EXE_NAME); $install=([IO.Path]::GetFullPath([string]$env:INSTALL_DIR)).TrimEnd('\') + '\'; function Get-AppProc { $items=@(); if ($exe) { $items += @(Get-Process -Name $exe -ErrorAction SilentlyContinue) }; $target=0; if ([int]::TryParse([string]$env:PID, [ref]$target)) { $p=Get-Process -Id $target -ErrorAction SilentlyContinue; if ($p) { $items += $p } }; $items | Sort-Object Id -Unique | Where-Object { try { $p=[IO.Path]::GetFullPath([string]$_.Path); $p.StartsWith($install, [StringComparison]::OrdinalIgnoreCase) } catch { $false } } }; function Wait-Gone([int]$seconds) { $deadline=(Get-Date).AddSeconds($seconds); while ((Get-Date) -lt $deadline) { $procs=@(Get-AppProc); if ($procs.Count -eq 0) { return $true }; Start-Sleep -Milliseconds 500 }; return (@(Get-AppProc).Count -eq 0) }; if (-not (Wait-Gone 20)) { $procs=@(Get-AppProc); if ($procs.Count -gt 0) { Write-Host ('[SerrebiTorrent Update] Asking remaining app instance(s) to close: ' + (($procs | ForEach-Object Id) -join ', ')); foreach ($p in $procs) { try { $null=$p.CloseMainWindow() } catch { } } } }; if (-not (Wait-Gone 10)) { $procs=@(Get-AppProc); if ($procs.Count -gt 0) { Write-Host ('[SerrebiTorrent Update] Forcing remaining app instance(s) to exit: ' + (($procs | ForEach-Object Id) -join ', ')); foreach ($p in $procs) { try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { } } } }; if (-not (Wait-Gone 10)) { $procs=@(Get-AppProc); Write-Host ('[X] SerrebiTorrent is still running from the install folder: ' + (($procs | ForEach-Object Id) -join ', ')); exit 1 }; Start-Sleep -Milliseconds 1500; exit 0"
+exit /b %ERRORLEVEL%
+
+:verify_install_unlocked
+echo [SerrebiTorrent Update] Verifying install files are unlocked...
+powershell -NoProfile -InputFormat None -Command "$ErrorActionPreference='SilentlyContinue'; $install=[string]$env:INSTALL_DIR; $exe=[string]$env:EXE_NAME; $paths=@((Join-Path $install $exe),(Join-Path $install '_internal\VCRUNTIME140.dll'),(Join-Path $install '_internal\python314.dll'),(Join-Path $install '_internal\python313.dll'),(Join-Path $install '_internal\python312.dll'),(Join-Path $install '_internal\python311.dll')); $locked=@(); foreach ($path in $paths) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }; $ok=$false; for ($i=0; $i -lt 8 -and -not $ok; $i++) { try { $fs=[IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None); $fs.Close(); $ok=$true } catch { Start-Sleep -Milliseconds 500 } }; if (-not $ok) { $locked += $path } }; if ($locked.Count -gt 0) { Write-Host '[X] Install files are still locked:'; $locked | ForEach-Object { Write-Host ('    ' + $_) }; exit 1 }; exit 0"
+exit /b %ERRORLEVEL%
+
+:verify_install_drained
+powershell -NoProfile -InputFormat None -Command "$ErrorActionPreference='SilentlyContinue'; $install=([IO.Path]::GetFullPath([string]$env:INSTALL_DIR)).TrimEnd('\') + '\'; $excluded=@('.git','.venv','__pycache__','SerrebiTorrent_Data'); $remaining=@(Get-ChildItem -LiteralPath $install -File -Recurse -Force | Where-Object { $rel=$_.FullName.Substring($install.Length).TrimStart('\'); if ($rel -ieq 'config.json') { return $false }; $parts=$rel -split '\\'; -not @($parts | Where-Object { $excluded -contains $_ }) } | Select-Object -First 10); if ($remaining.Count -gt 0) { Write-Host '[X] Files remained in the install folder after backup:'; $remaining | ForEach-Object { Write-Host ('    ' + $_.FullName) }; exit 1 }; exit 0"
+exit /b %ERRORLEVEL%
 
 :cleanup_staging_root
 set "CLEANUP_STAGING_DIR=%~1"
@@ -204,6 +221,21 @@ echo timeout /t 2 /nobreak ^>nul 2^>nul >> "%STAGING_CLEANUP_SCRIPT%"
 echo rmdir /s /q "%STAGING_ROOT_TO_DELETE%" ^>nul 2^>nul >> "%STAGING_CLEANUP_SCRIPT%"
 echo del "%%~f0" ^>nul 2^>nul >> "%STAGING_CLEANUP_SCRIPT%"
 powershell -WindowStyle Hidden -NoProfile -Command "Start-Process -FilePath cmd.exe -ArgumentList '/c','\"%STAGING_CLEANUP_SCRIPT%\"' -WindowStyle Hidden" >nul 2>nul
+exit /b 0
+
+:schedule_temp_cleanup
+set "TEMP_ROOT_TO_DELETE=%~1"
+if "%TEMP_ROOT_TO_DELETE%"=="" exit /b 0
+for /f %%T in ('powershell -NoProfile -InputFormat None -Command "(Get-Date).ToString(\"yyyyMMddHHmmss\")"') do set "TEMPSTAMP=%%T"
+set "TEMP_CLEANUP_SCRIPT=%TEMP%\SerrebiTorrent_temp_cleanup_!TEMPSTAMP!_!RANDOM!.bat"
+
+echo @echo off > "%TEMP_CLEANUP_SCRIPT%"
+echo timeout /t 2 /nobreak ^>nul 2^>nul >> "%TEMP_CLEANUP_SCRIPT%"
+echo set "CLEAN_TEMP_ROOT=%TEMP_ROOT_TO_DELETE%" >> "%TEMP_CLEANUP_SCRIPT%"
+echo set "CLEAN_INSTALL_DIR=%INSTALL_DIR%" >> "%TEMP_CLEANUP_SCRIPT%"
+echo powershell -NoProfile -Command "$path=[string]$env:CLEAN_TEMP_ROOT; $install=[string]$env:CLEAN_INSTALL_DIR; try { if (-not $path) { exit 0 }; $full=[IO.Path]::GetFullPath($path); $inst=[IO.Path]::GetFullPath($install); if ($full -ieq $inst) { exit 0 }; if ($full -notmatch 'SerrebiTorrent_update_') { exit 0 }; if (Test-Path -LiteralPath $full -PathType Container) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }; $parent = Split-Path -Parent $full; if ((Split-Path -Leaf $parent) -ieq '_SerrebiTorrent_update_tmp') { if (-not (Get-ChildItem -LiteralPath $parent -Force ^| Select-Object -First 1)) { Remove-Item -LiteralPath $parent -Recurse -Force -ErrorAction SilentlyContinue } } } catch { }" ^>nul 2^>nul >> "%TEMP_CLEANUP_SCRIPT%"
+echo del "%%~f0" ^>nul 2^>nul >> "%TEMP_CLEANUP_SCRIPT%"
+powershell -WindowStyle Hidden -NoProfile -Command "Start-Process -FilePath cmd.exe -ArgumentList '/c','\"%TEMP_CLEANUP_SCRIPT%\"' -WindowStyle Hidden" >nul 2>nul
 exit /b 0
 
 :schedule_backup_cleanup

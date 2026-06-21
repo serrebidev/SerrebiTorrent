@@ -36,6 +36,24 @@ def test_login(client):
     assert rv.status_code == 403
 
 
+def test_session_invalidates_after_credentials_change(client):
+    original = web_server.WEB_CONFIG.copy()
+    try:
+        web_server.WEB_CONFIG.update({'username': 'admin', 'password': 'password'})
+        rv = client.post('/api/v2/auth/login', data={'username': 'admin', 'password': 'password'})
+        assert rv.status_code == 200
+
+        web_server.WEB_CONFIG.update({'password': 'new-secret'})
+        rv = client.get('/api/v2/auth/csrf')
+
+        assert rv.status_code == 403
+        with client.session_transaction() as session:
+            assert 'logged_in' not in session
+            assert 'auth_fingerprint' not in session
+    finally:
+        web_server.WEB_CONFIG.update(original)
+
+
 def test_web_ui_does_not_start_with_default_password(monkeypatch):
     original = web_server.WEB_CONFIG.copy()
     original_thread = web_server.server_thread

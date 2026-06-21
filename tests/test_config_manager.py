@@ -55,3 +55,58 @@ def test_get_profiles_returns_copy(tmp_path, monkeypatch):
     profiles["p1"]["name"] = "Mutated"
 
     assert cm.get_profile("p1")["name"] == "Original"
+
+
+def test_load_config_repairs_blank_default_profile(tmp_path, monkeypatch):
+    config_path, _ = _configure_paths(tmp_path, monkeypatch)
+    config_path.write_text(
+        json.dumps({
+            "preferences": {},
+            "profiles": {"p1": {"name": "Local", "type": "local", "url": "C:\\X", "user": "", "password": ""}},
+            "default_profile": "",
+        }),
+        encoding="utf-8",
+    )
+
+    cm = config_manager.ConfigManager()
+
+    assert cm.get_default_profile_id() == "p1"
+
+
+def test_load_config_repairs_invalid_default_profile(tmp_path, monkeypatch):
+    config_path, _ = _configure_paths(tmp_path, monkeypatch)
+    config_path.write_text(
+        json.dumps({
+            "preferences": {},
+            "profiles": {
+                "p1": {"name": "One", "type": "local", "url": "C:\\One", "user": "", "password": ""},
+                "p2": {"name": "Two", "type": "local", "url": "C:\\Two", "user": "", "password": ""},
+            },
+            "default_profile": "missing",
+        }),
+        encoding="utf-8",
+    )
+
+    cm = config_manager.ConfigManager()
+
+    assert cm.get_default_profile_id() == "p1"
+
+
+def test_delete_default_profile_selects_remaining_profile(tmp_path, monkeypatch):
+    config_path, _ = _configure_paths(tmp_path, monkeypatch)
+    config_path.write_text(
+        json.dumps({
+            "preferences": {},
+            "profiles": {
+                "p1": {"name": "One", "type": "local", "url": "C:\\One", "user": "", "password": ""},
+                "p2": {"name": "Two", "type": "local", "url": "C:\\Two", "user": "", "password": ""},
+            },
+            "default_profile": "p1",
+        }),
+        encoding="utf-8",
+    )
+    cm = config_manager.ConfigManager()
+
+    cm.delete_profile("p1")
+
+    assert cm.get_default_profile_id() == "p2"

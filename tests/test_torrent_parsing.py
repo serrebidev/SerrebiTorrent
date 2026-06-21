@@ -1,5 +1,6 @@
 import base64
 import binascii
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from hypothesis import given, strategies as st
@@ -11,6 +12,12 @@ def test_parse_magnet_infohash_hex():
     info_hash = "0123456789abcdef0123456789abcdef01234567"
     url = f"magnet:?xt=urn:btih:{info_hash}"
     assert torrent_parsing.parse_magnet_infohash(url) == info_hash
+
+
+def test_parse_magnet_infohash_rejects_non_magnet_scheme():
+    info_hash = "0123456789abcdef0123456789abcdef01234567"
+    url = f"https://example.test/?xt=urn:btih:{info_hash}"
+    assert torrent_parsing.parse_magnet_infohash(url) is None
 
 
 def test_parse_magnet_infohash_base32():
@@ -59,6 +66,27 @@ def test_build_magnet_from_hybrid_hashes():
     assert f"xt=urn%3Abtih%3A{v1_hash}" in magnet
     assert f"xt=urn%3Abtmh%3A1220{v2_hash}" in magnet
     assert "dn=Hybrid" in magnet
+
+
+def test_build_magnet_sanitizes_and_dedupes_trackers():
+    v1_hash = "1" * 40
+    magnet = torrent_parsing.build_magnet_from_hashes(
+        v1_hash,
+        display_name="Tracked",
+        trackers=[
+            " udp://tracker.example:1337/announce ",
+            "",
+            "udp://tracker.example:1337/announce",
+            "https://tracker.example/announce\nhttps://backup.example/announce",
+        ],
+    )
+
+    query = parse_qs(urlparse(magnet).query)
+    assert query["tr"] == [
+        "udp://tracker.example:1337/announce",
+        "https://tracker.example/announce",
+        "https://backup.example/announce",
+    ]
 
 
 @given(st.text(min_size=0, max_size=200))

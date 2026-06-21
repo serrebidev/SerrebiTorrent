@@ -1,6 +1,7 @@
 import pytest
 import sys
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -235,3 +236,51 @@ def test_remove_cleans_known_state_even_without_handle(session_manager):
 
     session_manager.ses.remove_torrent.assert_not_called()
     assert info_hash not in session_manager.torrents_db
+
+
+def test_save_resume_keeps_pending_on_write_failure(session_manager, tmp_path):
+    info_hash = "3" * 40
+    session_manager.state_dir = str(tmp_path)
+    session_manager.pending_saves.add(info_hash)
+    alert = SimpleNamespace(params=SimpleNamespace(info_hashes=info_hash, save_path=""))
+
+    with patch('session_manager._write_resume_data_bytes', side_effect=OSError("boom")):
+        session_manager._handle_save_resume(alert)
+
+    assert info_hash in session_manager.pending_saves
+    assert not (tmp_path / f"{info_hash}.resume").exists()
+
+
+def test_save_resume_discards_pending_after_atomic_write(session_manager, tmp_path):
+    info_hash = "4" * 40
+    session_manager.state_dir = str(tmp_path)
+    session_manager.pending_saves.add(info_hash)
+    alert = SimpleNamespace(params=SimpleNamespace(info_hashes=info_hash, save_path=""))
+
+    with patch('session_manager._write_resume_data_bytes', return_value=b"resume-data"):
+        session_manager._handle_save_resume(alert)
+
+    assert info_hash not in session_manager.pending_saves
+    assert (tmp_path / f"{info_hash}.resume").read_bytes() == b"resume-data"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_cleanup_torrent_state_removes_db_key_files_when_called_with_alias(session_manager, tmp_path):
+    db_key = "5" * 40
+    alias = "6" * 40
+    session_manager.state_dir = str(tmp_path)
+    session_manager.torrents_db[db_key] = {"hashes": {"v1": alias}, "save_path": "/tmp"}
+    session_manager.pending_saves.update({db_key, alias})
+
+    with patch('os.path.exists', return_value=True), patch('os.remove') as remove_file:
+        with patch.object(session_manager, '_save_torrents_db'):
+            session_manager._cleanup_torrent_state([alias])
+
+    removed = {os.path.basename(call.args[0]) for call in remove_file.call_args_list}
+    assert f"{alias}.torrent" in removed
+    assert f"{alias}.resume" in removed
+    assert f"{db_key}.torrent" in removed
+    assert f"{db_key}.resume" in removed
+    assert db_key not in session_manager.torrents_db
+    assert db_key not in session_manager.pending_saves
+    assert alias not in session_manager.pending_saves

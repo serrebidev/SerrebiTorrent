@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import datetime
+import glob
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
@@ -22,6 +27,11 @@ APP_EXE_NAME = "SerrebiTorrent.exe"
 
 API_TIMEOUT = 15
 DOWNLOAD_TIMEOUT = 60
+MAX_UPDATE_MANIFEST_BYTES = 1024 * 1024
+MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
+MAX_UPDATE_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+MAX_UPDATE_ZIP_MEMBER_BYTES = 512 * 1024 * 1024
+MAX_UPDATE_ZIP_MEMBERS = 20000
 
 _SEMVER_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 _STRICT_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
@@ -64,6 +74,42 @@ def get_allowed_thumbprints(manifest: Dict[str, Any]) -> Tuple[str, ...]:
     return _normalize_thumbprints(list(_extract_manifest_thumbprints(manifest)) + list(_env_thumbprints()))
 
 
+def _dedupe_paths(paths: Iterable[str]) -> Tuple[str, ...]:
+    seen = set()
+    out = []
+    for path in paths:
+        raw = str(path or "").strip()
+        if not raw:
+            continue
+        key = os.path.normcase(os.path.abspath(raw))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw)
+    return tuple(out)
+
+
+def _powershell_executables() -> Tuple[str, ...]:
+    candidates = []
+    for name in ("pwsh", "powershell"):
+        path = shutil.which(name)
+        if path:
+            candidates.append(path)
+
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    candidates.extend(
+        [
+            os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+            os.path.join(system_root, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        ]
+    )
+    return _dedupe_paths(path for path in candidates if os.path.isfile(path) or shutil.which(path))
+
+
+def _ps_single_quote(value: str) -> str:
+    return "'" + str(value or "").replace("'", "''") + "'"
+
+
 class UpdateError(Exception):
     pass
 
@@ -78,6 +124,16 @@ class UpdateInfo:
     latest_version: str
     manifest: Dict[str, Any]
     release: Dict[str, Any]
+
+
+@dataclass
+class UpdateCheckResult:
+    status: str
+    message: str
+    info: Optional[UpdateInfo] = None
+
+
+UPDATE_CANCELED_MESSAGE = "Update canceled."
 
 
 def parse_semver(text: str) -> Optional[Tuple[int, int, int]]:
@@ -99,6 +155,22 @@ def is_newer_version(current: Tuple[int, int, int], latest: Tuple[int, int, int]
 
 def _is_sha256(value: str) -> bool:
     return bool(value) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def _is_thumbprint(value: str) -> bool:
+    return bool(value) and re.fullmatch(r"[0-9A-F]{40}", value) is not None
+
+
+def _validate_published_at(value: Any) -> None:
+    text = str(value or "").strip()
+    if not text:
+        raise UpdateError("Update manifest has an invalid published_at timestamp.")
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        datetime.datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise UpdateError("Update manifest has an invalid published_at timestamp.") from exc
 
 
 def _validate_download_url(url: str) -> None:
@@ -152,15 +224,33 @@ def download_manifest(release: Dict[str, Any]) -> Dict[str, Any]:
         raise UpdateError("Update manifest asset is missing a download URL.")
     _validate_download_url(str(url))
     try:
-        response = requests.get(url, timeout=API_TIMEOUT)
+        response = requests.get(url, timeout=API_TIMEOUT, stream=True)
     except requests.RequestException as exc:
         raise UpdateError(f"Network error while downloading manifest: {exc}") from exc
-    if response.status_code != 200:
-        raise UpdateError(f"Failed to download update manifest: {response.status_code}")
     try:
-        return response.json()
-    except json.JSONDecodeError as exc:
-        raise UpdateError(f"Update manifest is not valid JSON: {exc}") from exc
+        if response.status_code != 200:
+            raise UpdateError(f"Failed to download update manifest: {response.status_code}")
+        content_length = response.headers.get("Content-Length")
+        if content_length:
+            try:
+                expected_size = int(content_length)
+            except ValueError as exc:
+                raise UpdateError("Update manifest returned an invalid Content-Length.") from exc
+            if expected_size < 0 or expected_size > MAX_UPDATE_MANIFEST_BYTES:
+                raise UpdateError("Update manifest is larger than the allowed size.")
+        content = b""
+        for chunk in response.iter_content(64 * 1024):
+            if not chunk:
+                continue
+            content += chunk
+            if len(content) > MAX_UPDATE_MANIFEST_BYTES:
+                raise UpdateError("Update manifest is larger than the allowed size.")
+        try:
+            return json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise UpdateError(f"Update manifest is not valid JSON: {exc}") from exc
+    finally:
+        response.close()
 
 
 def validate_manifest(manifest: Dict[str, Any], release: Dict[str, Any]) -> Dict[str, Any]:
@@ -170,11 +260,19 @@ def validate_manifest(manifest: Dict[str, Any], release: Dict[str, Any]) -> Dict
 
     if not _is_sha256(str(manifest.get("sha256", ""))):
         raise UpdateError("Update manifest has an invalid sha256 checksum.")
+    _validate_published_at(manifest.get("published_at"))
+    manifest_thumbprints = _normalize_thumbprints(_extract_manifest_thumbprints(manifest))
+    if not manifest_thumbprints or any(not _is_thumbprint(tp) for tp in manifest_thumbprints):
+        raise UpdateError("Update manifest has an invalid signing thumbprint.")
 
     release_tag = release.get("tag_name", "")
     manifest_version = parse_semver(str(manifest.get("version", "")))
     release_version = parse_semver(release_tag)
-    if manifest_version and release_version and manifest_version != release_version:
+    if not manifest_version:
+        raise UpdateError("Update manifest version is not a semver version.")
+    if not release_version:
+        raise UpdateError("Latest release tag is not a semver version.")
+    if manifest_version != release_version:
         raise UpdateError("Update manifest version does not match the latest release tag.")
 
     asset = _find_asset(release, str(manifest.get("asset_filename", "")))
@@ -192,26 +290,45 @@ def validate_manifest(manifest: Dict[str, Any], release: Dict[str, Any]) -> Dict
     return manifest
 
 
-def check_for_update() -> Optional[UpdateInfo]:
-    release = fetch_latest_release()
-    tag = str(release.get("tag_name", ""))
-    latest_tuple = parse_semver(tag)
+def check_for_updates() -> UpdateCheckResult:
     current_tuple = parse_semver(APP_VERSION)
-    if not latest_tuple:
-        raise UpdateError("Latest release tag is not a semver version.")
     if not current_tuple:
-        raise UpdateError("Current app version is not a semver version.")
-    if not is_newer_version(current_tuple, latest_tuple):
-        return None
+        return UpdateCheckResult("error", f"Current app version is not semver: {APP_VERSION}")
+    try:
+        release = fetch_latest_release()
+        tag = str(release.get("tag_name", "")).strip()
+        latest_tuple = parse_semver(tag)
+        if not latest_tuple:
+            return UpdateCheckResult("error", f"Latest release tag is not semver: {tag}")
+        if not is_newer_version(current_tuple, latest_tuple):
+            return UpdateCheckResult("up_to_date", f"SerrebiTorrent is up to date (v{format_version(current_tuple)}).")
 
-    manifest = validate_manifest(download_manifest(release), release)
-    latest_version = format_version(latest_tuple)
-    return UpdateInfo(
-        current_version=APP_VERSION,
-        latest_version=latest_version,
-        manifest=manifest,
-        release=release,
-    )
+        manifest = validate_manifest(download_manifest(release), release)
+        latest_version = format_version(latest_tuple)
+        info = UpdateInfo(
+            current_version=APP_VERSION,
+            latest_version=latest_version,
+            manifest=manifest,
+            release=release,
+        )
+        return UpdateCheckResult("update_available", "Update available.", info)
+    except RateLimitError as exc:
+        return UpdateCheckResult("rate_limited", str(exc))
+    except UpdateError as exc:
+        return UpdateCheckResult("error", str(exc))
+    except Exception as exc:
+        return UpdateCheckResult("error", f"Update check failed: {exc}")
+
+
+def check_for_update() -> Optional[UpdateInfo]:
+    result = check_for_updates()
+    if result.status == "update_available":
+        return result.info
+    if result.status == "up_to_date":
+        return None
+    if result.status == "rate_limited":
+        raise RateLimitError(result.message)
+    raise UpdateError(result.message)
 
 
 def download_file(url: str, dest_path: str) -> None:
@@ -220,10 +337,32 @@ def download_file(url: str, dest_path: str) -> None:
         with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
             if response.status_code != 200:
                 raise UpdateError(f"Download failed: {response.status_code} {response.reason}")
-            with open(dest_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
+            content_length = response.headers.get("Content-Length")
+            if content_length:
+                try:
+                    expected_size = int(content_length)
+                except ValueError as exc:
+                    raise UpdateError("Update download returned an invalid Content-Length.") from exc
+                if expected_size < 0:
+                    raise UpdateError("Update download returned an invalid Content-Length.")
+                if expected_size > MAX_UPDATE_DOWNLOAD_BYTES:
+                    raise UpdateError("Update download is larger than the allowed size.")
+            try:
+                written = 0
+                with open(dest_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > MAX_UPDATE_DOWNLOAD_BYTES:
+                            raise UpdateError("Update download is larger than the allowed size.")
                         f.write(chunk)
+            except Exception:
+                try:
+                    os.remove(dest_path)
+                except OSError:
+                    pass
+                raise
     except requests.RequestException as exc:
         raise UpdateError(f"Network error while downloading update: {exc}") from exc
 
@@ -238,11 +377,27 @@ def compute_sha256(path: str) -> str:
 
 def extract_zip(zip_path: str, dest_dir: str) -> None:
     dest_abs = os.path.abspath(dest_dir)
+    dest_norm = os.path.normcase(dest_abs)
     with zipfile.ZipFile(zip_path, "r") as zf:
-        for member in zf.infolist():
-            target = os.path.abspath(os.path.join(dest_abs, member.filename))
-            if target != dest_abs and not target.startswith(dest_abs + os.sep):
+        members = zf.infolist()
+        if len(members) > MAX_UPDATE_ZIP_MEMBERS:
+            raise UpdateError("Update archive contains too many files.")
+        total_size = 0
+        for member in members:
+            member_name = member.filename.replace("\\", "/")
+            target = os.path.abspath(os.path.join(dest_abs, member_name))
+            target_norm = os.path.normcase(target)
+            try:
+                common = os.path.commonpath([dest_norm, target_norm])
+            except ValueError as exc:
+                raise UpdateError(f"Unsafe path in update archive: {member.filename}") from exc
+            if common != dest_norm:
                 raise UpdateError(f"Unsafe path in update archive: {member.filename}")
+            if member.file_size > MAX_UPDATE_ZIP_MEMBER_BYTES:
+                raise UpdateError("Update archive contains a file larger than the allowed size.")
+            total_size += member.file_size
+            if total_size > MAX_UPDATE_ZIP_UNCOMPRESSED_BYTES:
+                raise UpdateError("Update archive is larger than the allowed uncompressed size.")
         zf.extractall(dest_abs)
 
 
@@ -264,56 +419,286 @@ def find_app_dir(staging_dir: str, exe_name: str = APP_EXE_NAME) -> Optional[str
 
 def verify_authenticode(exe_path: str, allowed_thumbprints: Iterable[str]) -> None:
     allowed = set(_normalize_thumbprints(allowed_thumbprints))
-    module_paths = []
-    for candidate in (
-        r"C:\Program Files\WindowsPowerShell\Modules",
-        r"C:\Windows\System32\WindowsPowerShell\v1.0\Modules",
-    ):
-        if os.path.isdir(candidate):
-            module_paths.append(candidate)
-    module_path = ";".join(module_paths)
-    # Escape single quotes in path for PowerShell
-    escaped_path = exe_path.replace("'", "''")
-    powershell_exe = os.path.join(
-        os.environ.get("SystemRoot", r"C:\Windows"),
-        "System32",
-        "WindowsPowerShell",
-        "v1.0",
-        "powershell.exe",
+    if not allowed:
+        raise UpdateError("No trusted Authenticode signing thumbprint is configured.")
+    ps_script = (
+        "$ErrorActionPreference = 'Stop';"
+        "Import-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue;"
+        f"$sig = Get-AuthenticodeSignature -FilePath {_ps_single_quote(exe_path)};"
+        "$subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' };"
+        "$thumb = if ($sig.SignerCertificate) { $sig.SignerCertificate.Thumbprint } else { '' };"
+        "$out = @{Status=$sig.Status.ToString(); StatusMessage=$sig.StatusMessage; Subject=$subject; Thumbprint=$thumb};"
+        "$out | ConvertTo-Json -Compress"
     )
-    if not os.path.isfile(powershell_exe):
-        powershell_exe = "powershell.exe"
-    cmd = [
-        powershell_exe,
-        "-NoProfile",
-        "-Command",
-        (
-            f"$env:PSModulePath='{module_path}'; "
-            "Get-AuthenticodeSignature -FilePath "
-            f"'{escaped_path}' | Select-Object -Property Status,StatusMessage,@{{n='Thumbprint';e={{$_.SignerCertificate.Thumbprint}}}} | ConvertTo-Json"
-        ),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise UpdateError(f"Signature verification failed: {result.stderr.strip()}")
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise UpdateError("Signature verification did not return valid JSON.") from exc
-    status = str(data.get("Status", "")).strip()
-    status_msg = str(data.get("StatusMessage", "")).strip()
-    thumbprint = _normalize_thumbprint(data.get("Thumbprint"))
-    status_l = status.lower()
-    if status_l != "valid":
-        # PowerShell may serialize Signature.Status as the enum name
-        # (UnknownError) or as its integer value (1), depending on host/version.
+    last_error = ""
+    for powershell_exe in _powershell_executables():
+        try:
+            result = subprocess.run(
+                [powershell_exe, "-NoProfile", "-Command", ps_script],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as exc:
+            last_error = f"{powershell_exe}: {exc}"
+            continue
+
+        if result.returncode != 0:
+            msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            last_error = f"{powershell_exe}: {msg}"
+            continue
+        try:
+            data = json.loads(result.stdout.strip())
+        except json.JSONDecodeError as exc:
+            last_error = f"{powershell_exe}: invalid Authenticode data: {exc}"
+            continue
+
+        status = str(data.get("Status", "")).strip()
+        status_msg = str(data.get("StatusMessage", "")).strip()
+        thumbprint = _normalize_thumbprint(data.get("Thumbprint"))
+        status_l = status.lower()
+        if status_l in ("valid", "0"):
+            if not thumbprint or thumbprint not in allowed:
+                detail = "Authenticode signer thumbprint is not allowed."
+                if thumbprint:
+                    detail = f"{detail} (thumbprint {thumbprint})"
+                raise UpdateError(detail)
+            return
         if status_l in ("unknownerror", "1") and thumbprint and thumbprint in allowed:
             return
         msg = status_msg or "Unknown signature status."
-        detail = f"Authenticode signature is not valid: {msg}".strip()
+        detail = f"Authenticode signature is not valid: {status} {msg}".strip()
         if thumbprint:
             detail = f"{detail} (thumbprint {thumbprint})"
         raise UpdateError(detail)
+
+    if last_error:
+        raise UpdateError(f"Authenticode verification failed: {last_error}")
+    raise UpdateError("Authenticode verification failed: PowerShell was not found.")
+
+
+def is_update_supported(install_dir: Optional[str] = None) -> bool:
+    if not getattr(sys, "frozen", False):
+        return False
+    install_dir = install_dir or os.path.dirname(sys.executable)
+    return os.path.isfile(os.path.join(install_dir, "update_helper.bat"))
+
+
+def _make_update_temp_root(install_dir: str) -> str:
+    install_dir = os.path.abspath(str(install_dir or ""))
+    parent = os.path.dirname(install_dir)
+    candidates = []
+    if parent:
+        candidates.append(os.path.join(parent, "_SerrebiTorrent_update_tmp"))
+    for base in candidates:
+        try:
+            os.makedirs(base, exist_ok=True)
+            probe = os.path.join(base, f".probe_{os.getpid()}_{int(time.time())}")
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(probe)
+            return tempfile.mkdtemp(prefix="SerrebiTorrent_update_", dir=base)
+        except Exception:
+            continue
+    return tempfile.mkdtemp(prefix="SerrebiTorrent_update_")
+
+
+def _safe_remove_dir(path: str, install_dir: str, reason: str) -> None:
+    if not path:
+        return
+    try:
+        full_path = os.path.realpath(path)
+    except Exception:
+        return
+    if not os.path.isdir(full_path):
+        return
+    try:
+        install_path = os.path.realpath(install_dir)
+    except Exception:
+        install_path = install_dir
+    target_norm = os.path.normcase(full_path)
+    install_norm = os.path.normcase(install_path)
+    if target_norm in (install_norm, os.path.normcase(os.path.dirname(install_path))):
+        return
+    if target_norm == os.path.normcase(os.path.abspath(os.sep)):
+        return
+    try:
+        shutil.rmtree(full_path)
+    except Exception:
+        pass
+
+
+def cleanup_update_artifacts(install_dir: Optional[str] = None) -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    install_dir = os.path.abspath(install_dir or os.path.dirname(sys.executable))
+    parent_dir = os.path.dirname(install_dir)
+    install_base = os.path.basename(install_dir).lower()
+    for path in glob.glob(f"{install_dir}_backup_*"):
+        base = os.path.basename(path).lower()
+        if base.startswith(f"{install_base}_backup_"):
+            _safe_remove_dir(path, install_dir, "backup")
+    update_tmp_parent = os.path.join(parent_dir, "_SerrebiTorrent_update_tmp")
+    try:
+        if os.path.isdir(update_tmp_parent):
+            for entry in os.listdir(update_tmp_parent):
+                if entry.startswith("SerrebiTorrent_update_"):
+                    _safe_remove_dir(os.path.join(update_tmp_parent, entry), install_dir, "temp")
+            if not os.listdir(update_tmp_parent):
+                _safe_remove_dir(update_tmp_parent, install_dir, "temp parent")
+    except Exception:
+        pass
+    try:
+        temp_dir = tempfile.gettempdir()
+        for entry in os.listdir(temp_dir):
+            if entry.startswith("SerrebiTorrent_update_"):
+                _safe_remove_dir(os.path.join(temp_dir, entry), install_dir, "temp")
+    except Exception:
+        pass
+
+
+def launch_update_helper(
+    helper_path: str,
+    parent_pid: int,
+    install_dir: str,
+    staging_root: str,
+    temp_root: Optional[str] = None,
+) -> Tuple[bool, str]:
+    try:
+        helper_cwd = os.path.dirname(helper_path)
+        if not helper_cwd or not os.path.isdir(helper_cwd):
+            helper_cwd = tempfile.gettempdir()
+
+        creationflags = 0
+        startupinfo = None
+        breakaway_flag = 0
+        if sys.platform == "win32":
+            create_no_window = 0x08000000
+            create_new_process_group = 0x00000200
+            breakaway_flag = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+            creationflags = create_no_window | create_new_process_group | breakaway_flag
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+
+        cmd = [
+            os.environ.get("COMSPEC", "cmd.exe"),
+            "/d",
+            "/c",
+            helper_path,
+            str(parent_pid),
+            install_dir,
+            staging_root,
+            APP_EXE_NAME,
+        ]
+        if temp_root:
+            cmd.append(temp_root)
+
+        try:
+            subprocess.Popen(
+                cmd,
+                cwd=helper_cwd,
+                creationflags=creationflags,
+                startupinfo=startupinfo,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+        except Exception:
+            if sys.platform == "win32" and breakaway_flag:
+                subprocess.Popen(
+                    cmd,
+                    cwd=helper_cwd,
+                    creationflags=creationflags & ~breakaway_flag,
+                    startupinfo=startupinfo,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                )
+            else:
+                raise
+        return True, ""
+    except Exception as exc:
+        return False, f"Failed to start update helper: {exc}"
+
+
+def download_and_apply_update(info: UpdateInfo, install_dir: Optional[str] = None, progress_cb=None) -> Tuple[bool, str]:
+    def report(phase: str, fraction) -> bool:
+        if progress_cb is None:
+            return True
+        try:
+            result = progress_cb(phase, fraction)
+            return result is None or bool(result)
+        except Exception:
+            return True
+
+    install_dir = os.path.abspath(install_dir or os.path.dirname(sys.executable))
+    if not is_update_supported(install_dir):
+        return False, "Auto-update is not available for this build."
+
+    temp_root = _make_update_temp_root(install_dir)
+    extract_dir = os.path.join(temp_root, "extract")
+    os.makedirs(extract_dir, exist_ok=True)
+    zip_name = str(info.manifest.get("asset_filename") or f"SerrebiTorrent-v{info.latest_version}.zip")
+    zip_path = os.path.join(temp_root, zip_name)
+
+    success = False
+    try:
+        if not report("Downloading update...", 0.0):
+            return False, UPDATE_CANCELED_MESSAGE
+        download_file(str(info.manifest.get("download_url")), zip_path)
+
+        if not report("Verifying download...", None):
+            return False, UPDATE_CANCELED_MESSAGE
+        expected = str(info.manifest.get("sha256", "")).lower()
+        actual = compute_sha256(zip_path).lower()
+        if expected != actual:
+            return False, "Downloaded update failed SHA-256 verification."
+
+        if not report("Extracting update...", None):
+            return False, UPDATE_CANCELED_MESSAGE
+        extract_zip(zip_path, extract_dir)
+        new_dir = find_app_dir(extract_dir)
+        if not new_dir:
+            return False, "Extracted update does not contain application files."
+        new_exe = os.path.join(new_dir, APP_EXE_NAME)
+        if not os.path.isfile(new_exe):
+            return False, "Updated executable not found."
+
+        if not report("Verifying signature...", None):
+            return False, UPDATE_CANCELED_MESSAGE
+        verify_authenticode(new_exe, get_allowed_thumbprints(info.manifest))
+
+        helper_src = os.path.join(new_dir, "update_helper.bat")
+        if not os.path.isfile(helper_src):
+            helper_src = os.path.join(install_dir, "update_helper.bat")
+        if not os.path.isfile(helper_src):
+            return False, "Update helper script not found."
+        helper_run_path = os.path.join(temp_root, "update_helper.bat")
+        try:
+            shutil.copy2(helper_src, helper_run_path)
+        except Exception:
+            helper_run_path = helper_src
+
+        if not report("Preparing restart...", None):
+            return False, UPDATE_CANCELED_MESSAGE
+        ok, msg = launch_update_helper(helper_run_path, os.getpid(), install_dir, new_dir, temp_root=temp_root)
+        if not ok:
+            return False, msg
+        success = True
+        return True, "Update prepared. The app will restart after it exits."
+    except UpdateError as exc:
+        return False, str(exc)
+    except Exception as exc:
+        return False, f"Update failed: {exc}"
+    finally:
+        # On success the spawned helper owns temp_root (extracted files + helper
+        # copy) and cleans it up after restart; on any failure/cancel path remove
+        # it now so a failed update doesn't leak the ZIP + extracted tree.
+        if not success:
+            _safe_remove_dir(temp_root, install_dir, "failed update temp")
 
 
 def build_update_prompt(info: UpdateInfo) -> str:

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -37,7 +38,16 @@ def _parse_signtool_thumbprint(signtool_path: Path, exe_path: Path) -> Optional[
     match = re.search(r"SHA1 hash:\s*([0-9A-Fa-f]{40})", data)
     if not match:
         return None
-    return match.group(1).upper()
+    return _normalize_thumbprint(match.group(1))
+
+
+def _normalize_thumbprint(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    thumbprint = re.sub(r"\s+", "", value).upper()
+    if not re.fullmatch(r"[0-9A-F]{40}", thumbprint):
+        return None
+    return thumbprint
 
 
 def build_manifest(
@@ -63,9 +73,13 @@ def build_manifest(
         "published_at": published_at,
         "notes_summary": notes,
     }
-    thumbprint = signing_thumbprint or _parse_signtool_thumbprint(signtool_path, exe_path)
-    if thumbprint:
-        manifest["signing_thumbprint"] = thumbprint
+    thumbprint = _normalize_thumbprint(signing_thumbprint) or _parse_signtool_thumbprint(signtool_path, exe_path)
+    if not thumbprint:
+        raise RuntimeError(
+            "Failed to capture Authenticode signing thumbprint. "
+            "Pass --signing-thumbprint or verify SignTool can read the signed executable."
+        )
+    manifest["signing_thumbprint"] = thumbprint
     output_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
@@ -82,17 +96,21 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
-    build_manifest(
-        version=args.version,
-        asset_name=args.asset_name,
-        download_url=args.download_url,
-        zip_path=Path(args.zip_path),
-        notes_path=Path(args.notes_path),
-        signtool_path=Path(args.signtool_path),
-        exe_path=Path(args.exe_path),
-        signing_thumbprint=args.signing_thumbprint,
-        output_path=Path(args.output),
-    )
+    try:
+        build_manifest(
+            version=args.version,
+            asset_name=args.asset_name,
+            download_url=args.download_url,
+            zip_path=Path(args.zip_path),
+            notes_path=Path(args.notes_path),
+            signtool_path=Path(args.signtool_path),
+            exe_path=Path(args.exe_path),
+            signing_thumbprint=args.signing_thumbprint,
+            output_path=Path(args.output),
+        )
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

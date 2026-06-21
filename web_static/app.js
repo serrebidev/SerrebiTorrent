@@ -37,7 +37,12 @@ async function apiFetch(url, options = {}) {
         headers.set('X-CSRF-Token', token);
         options.headers = headers;
     }
-    return fetch(url, options);
+    const res = await fetch(url, options);
+    if (res.status === 403) {
+        csrfToken = null;
+        window.location.href = '/login.html';
+    }
+    return res;
 }
 
 const els = {

@@ -51,6 +51,14 @@ def test_column_sort_preserves_selection_by_hash():
     assert "self.Select(idx, row.get('hash') in selected_hashes)" in source
 
 
+def test_details_follow_focused_torrent_for_keyboard_navigation():
+    init_source = inspect.getsource(main.MainFrame.__init__)
+    helper_source = inspect.getsource(main.MainFrame._get_detail_hash)
+
+    assert "wx.EVT_LIST_ITEM_FOCUSED" in init_source
+    assert "active_torrent_hash_for_details(self.torrent_list)" in helper_source
+
+
 def test_file_priority_worker_uses_captured_client_generation():
     set_source = inspect.getsource(main.TorrentDetailsPanel.set_priority)
     worker_source = inspect.getsource(main.TorrentDetailsPanel._set_priority_bg)

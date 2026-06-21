@@ -12,6 +12,18 @@ import wx
 import main
 
 
+class FakeTorrentListForDetails:
+    def __init__(self, focused_hash=None, selected_hashes=None):
+        self.focused_hash = focused_hash
+        self.selected_hashes = selected_hashes or []
+
+    def get_focused_hash(self):
+        return self.focused_hash
+
+    def get_selected_hashes(self):
+        return list(self.selected_hashes)
+
+
 class FakeVirtualList(main.AccessibleVirtualListMixin):
     """Stubs the wx.ListCtrl surface the mixin relies on, recording calls."""
 
@@ -105,3 +117,18 @@ def test_set_virtual_item_count_sets_count_when_changed():
     lst.set_virtual_item_count(8)
     assert lst.set_count_calls == [8]
     assert lst.refresh_calls == 1
+
+
+def test_detail_hash_uses_focused_torrent_before_selection():
+    lst = FakeTorrentListForDetails(focused_hash="focused", selected_hashes=["selected"])
+    assert main.active_torrent_hash_for_details(lst) == "focused"
+
+
+def test_detail_hash_falls_back_to_selected_torrent():
+    lst = FakeTorrentListForDetails(selected_hashes=["selected"])
+    assert main.active_torrent_hash_for_details(lst) == "selected"
+
+
+def test_detail_hash_empty_when_no_focus_or_selection():
+    lst = FakeTorrentListForDetails()
+    assert main.active_torrent_hash_for_details(lst) is None

@@ -480,6 +480,21 @@ def register_associations():
     except Exception as e:
         wx.LogError(f"Failed to register associations: {e}")
 
+
+def active_torrent_hash_for_details(torrent_list):
+    try:
+        focused_hash = torrent_list.get_focused_hash()
+    except Exception:
+        focused_hash = None
+    if focused_hash:
+        return focused_hash
+    try:
+        hashes = torrent_list.get_selected_hashes()
+    except Exception:
+        hashes = []
+    return hashes[0] if hashes else None
+
+
 class AccessibleVirtualListMixin:
     """Keep one focused row alive across virtual-list refreshes for NVDA.
 
@@ -622,6 +637,9 @@ class TorrentListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         if 0 <= idx < len(self.data):
             return self.data[idx].get('hash')
         return None
+
+    def get_focused_hash(self):
+        return self._focused_hash()
 
     def _index_of_hash(self, target_hash):
         if target_hash is None:
@@ -2499,6 +2517,7 @@ class MainFrame(wx.Frame):
         self.torrent_list.Bind(wx.EVT_RIGHT_DOWN, self.on_context_menu)
         self.torrent_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_torrent_selected)
         self.torrent_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.on_torrent_selected)
+        self.torrent_list.Bind(wx.EVT_LIST_ITEM_FOCUSED, self.on_torrent_selected)
         
         # Details Panel
         self.details_panel = TorrentDetailsPanel(self.right_splitter, self)
@@ -3961,11 +3980,14 @@ class MainFrame(wx.Frame):
             self.current_filter = text
             self.refresh_data()
 
+    def _get_detail_hash(self):
+        return active_torrent_hash_for_details(self.torrent_list)
+
     def on_torrent_selected(self, event):
-        # Update details panel
-        hashes = self.torrent_list.get_selected_hashes()
-        if hashes:
-            self.details_panel.load_torrent(hashes[0])
+        # Update details panel from keyboard focus; selection can lag focus in virtual lists.
+        detail_hash = self._get_detail_hash()
+        if detail_hash:
+            self.details_panel.load_torrent(detail_hash)
         else:
             self.details_panel.load_torrent(None)
         event.Skip()

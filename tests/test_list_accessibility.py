@@ -233,3 +233,18 @@ def test_detail_hash_falls_back_to_selected_torrent():
 def test_detail_hash_empty_when_no_focus_or_selection():
     lst = FakeTorrentListForDetails()
     assert main.active_torrent_hash_for_details(lst) is None
+
+
+def test_action_hashes_preserve_selection_when_focused_torrent_is_selected():
+    lst = FakeTorrentListForDetails(focused_hash="focused", selected_hashes=["focused", "other"])
+    assert main.action_torrent_hashes(lst) == ["focused", "other"]
+
+
+def test_action_hashes_fall_back_to_focused_torrent():
+    lst = FakeTorrentListForDetails(focused_hash="focused")
+    assert main.action_torrent_hashes(lst) == ["focused"]
+
+
+def test_action_hashes_prefer_unselected_focus_over_stale_selection():
+    lst = FakeTorrentListForDetails(focused_hash="focused", selected_hashes=["stale"])
+    assert main.action_torrent_hashes(lst) == ["focused"]

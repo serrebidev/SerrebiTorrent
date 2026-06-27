@@ -110,6 +110,18 @@ def _ps_single_quote(value: str) -> str:
     return "'" + str(value or "").replace("'", "''") + "'"
 
 
+def _hidden_subprocess_kwargs() -> Dict[str, Any]:
+    if sys.platform != "win32":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        "startupinfo": startupinfo,
+    }
+
+
 class UpdateError(Exception):
     pass
 
@@ -331,12 +343,13 @@ def check_for_update() -> Optional[UpdateInfo]:
     raise UpdateError(result.message)
 
 
-def download_file(url: str, dest_path: str) -> None:
+def download_file(url: str, dest_path: str, progress_cb=None) -> None:
     _validate_download_url(url)
     try:
         with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
             if response.status_code != 200:
                 raise UpdateError(f"Download failed: {response.status_code} {response.reason}")
+            expected_size = None
             content_length = response.headers.get("Content-Length")
             if content_length:
                 try:
@@ -357,6 +370,13 @@ def download_file(url: str, dest_path: str) -> None:
                         if written > MAX_UPDATE_DOWNLOAD_BYTES:
                             raise UpdateError("Update download is larger than the allowed size.")
                         f.write(chunk)
+                        if progress_cb is not None:
+                            try:
+                                keep_going = progress_cb(written, expected_size)
+                            except Exception:
+                                keep_going = True
+                            if keep_going is False:
+                                raise UpdateError(UPDATE_CANCELED_MESSAGE)
             except Exception:
                 try:
                     os.remove(dest_path)
@@ -438,6 +458,7 @@ def verify_authenticode(exe_path: str, allowed_thumbprints: Iterable[str]) -> No
                 capture_output=True,
                 text=True,
                 check=False,
+                **_hidden_subprocess_kwargs(),
             )
         except Exception as exc:
             last_error = f"{powershell_exe}: {exc}"
@@ -648,16 +669,22 @@ def download_and_apply_update(info: UpdateInfo, install_dir: Optional[str] = Non
     try:
         if not report("Downloading update...", 0.0):
             return False, UPDATE_CANCELED_MESSAGE
-        download_file(str(info.manifest.get("download_url")), zip_path)
+        def download_progress(written, total):
+            fraction = None
+            if total:
+                fraction = min(0.70, max(0.0, (float(written) / float(total)) * 0.70))
+            return report("Downloading update...", fraction)
 
-        if not report("Verifying download...", None):
+        download_file(str(info.manifest.get("download_url")), zip_path, progress_cb=download_progress)
+
+        if not report("Verifying download...", 0.75):
             return False, UPDATE_CANCELED_MESSAGE
         expected = str(info.manifest.get("sha256", "")).lower()
         actual = compute_sha256(zip_path).lower()
         if expected != actual:
             return False, "Downloaded update failed SHA-256 verification."
 
-        if not report("Extracting update...", None):
+        if not report("Extracting update...", 0.85):
             return False, UPDATE_CANCELED_MESSAGE
         extract_zip(zip_path, extract_dir)
         new_dir = find_app_dir(extract_dir)
@@ -667,7 +694,7 @@ def download_and_apply_update(info: UpdateInfo, install_dir: Optional[str] = Non
         if not os.path.isfile(new_exe):
             return False, "Updated executable not found."
 
-        if not report("Verifying signature...", None):
+        if not report("Verifying signature...", 0.93):
             return False, UPDATE_CANCELED_MESSAGE
         verify_authenticode(new_exe, get_allowed_thumbprints(info.manifest))
 
@@ -682,7 +709,7 @@ def download_and_apply_update(info: UpdateInfo, install_dir: Optional[str] = Non
         except Exception:
             helper_run_path = helper_src
 
-        if not report("Preparing restart...", None):
+        if not report("Preparing restart...", 0.98):
             return False, UPDATE_CANCELED_MESSAGE
         ok, msg = launch_update_helper(helper_run_path, os.getpid(), install_dir, new_dir, temp_root=temp_root)
         if not ok:

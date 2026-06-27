@@ -739,14 +739,32 @@ async function updateDetails() {
 
 async function doAction(action, deleteFiles = false) {
     if (selectedHashes.size === 0) return;
+    if (action === 'delete' && !confirmDeleteAction(deleteFiles)) return;
     const formData = new FormData();
     formData.append('hashes', Array.from(selectedHashes).join('|'));
     if (deleteFiles) formData.append('deleteFiles', 'true');
-    const res = await apiFetch(`/api/v2/torrents/${action}`, { method: 'POST', body: formData });
-    if (res.ok) { 
-        hideContextMenu(); 
-        setTimeout(() => refreshData(true), 100); 
+    try {
+        const res = await apiFetch(`/api/v2/torrents/${action}`, { method: 'POST', body: formData });
+        if (res.ok) {
+            hideContextMenu();
+            setTimeout(() => refreshData(true), 100);
+            return;
+        }
+        const message = (await res.text()) || `Failed to ${action} torrent(s).`;
+        announceToSR(message, true);
+        alert(message);
+    } catch (err) {
+        const message = `Failed to ${action} torrent(s): ${err?.message || err}`;
+        announceToSR(message, true);
+        alert(message);
     }
+}
+
+function confirmDeleteAction(deleteFiles) {
+    const count = selectedHashes.size;
+    const label = count === 1 ? 'torrent' : 'torrents';
+    const dataText = deleteFiles ? ' and delete downloaded data' : '';
+    return window.confirm(`Remove ${count} ${label}${dataText}?`);
 }
 
 function fmtSize(bytes) {

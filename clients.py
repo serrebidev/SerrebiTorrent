@@ -6,6 +6,7 @@ import ipaddress
 import os
 import re
 import socket
+import time
 from urllib.parse import quote, urljoin, urlparse, urlunparse
 
 import requests
@@ -527,6 +528,9 @@ class RTorrentClient(BaseClient):
 # --- qBit ---
 import qbittorrentapi
 class QBittorrentClient(BaseClient):
+    _DELETE_VERIFY_ATTEMPTS = 5
+    _DELETE_VERIFY_DELAY_SECONDS = 0.2
+
     def __init__(self, u, us, pw):
         if not u.startswith(('http://', 'https://')):
             u = 'http://' + u
@@ -559,15 +563,49 @@ class QBittorrentClient(BaseClient):
         except Exception as e:
             print(f"qBittorrent error: {e}")
             return []
-    def start_torrent(self, h): self.c.torrents_resume(torrent_hashes=h)
-    def stop_torrent(self, h): self.c.torrents_pause(torrent_hashes=h)
-    def remove_torrent(self, h): self.c.torrents_delete(torrent_hashes=h, delete_files=False)
-    def remove_torrent_with_data(self, h): self.c.torrents_delete(torrent_hashes=h, delete_files=True)
+    def start_torrent(self, h): self._torrent_action("torrents_start", "torrents_resume", h)
+    def stop_torrent(self, h): self._torrent_action("torrents_stop", "torrents_pause", h)
+    def remove_torrent(self, h): self.remove_torrents([h], df=False)
+    def remove_torrent_with_data(self, h): self.remove_torrents([h], df=True)
+
+    def _torrent_action(self, preferred_method, fallback_method, h):
+        torrent_hash = self._normalize_hash(h)
+        method = getattr(self.c, preferred_method, None) or getattr(self.c, fallback_method)
+        method(torrent_hashes=torrent_hash)
+
     def remove_torrents(self, hs, df=False):
         hashes = self._normalize_hashes(hs)
         if not hashes:
             return
-        self.c.torrents_delete(torrent_hashes=hashes, delete_files=self._normalize_delete_files(df))
+        existing = self._existing_torrent_hashes(hashes)
+        if not existing:
+            raise RuntimeError("qBittorrent has no matching torrent for the selected hash.")
+
+        to_delete = [h for h in hashes if h.lower() in existing]
+        self.c.torrents_delete(torrent_hashes=to_delete, delete_files=self._normalize_delete_files(df))
+        remaining = self._wait_for_removed(to_delete)
+        if remaining:
+            sample = ", ".join(sorted(remaining)[:3])
+            extra = "" if len(remaining) <= 3 else f" and {len(remaining) - 3} more"
+            raise RuntimeError(f"qBittorrent did not remove torrent(s): {sample}{extra}")
+
+    def _existing_torrent_hashes(self, hashes):
+        existing = set()
+        for t in self.c.torrents_info(torrent_hashes=hashes):
+            h = str(getattr(t, "hash", "") or "").strip().lower()
+            if h:
+                existing.add(h)
+        return existing
+
+    def _wait_for_removed(self, hashes):
+        remaining = set(h.lower() for h in hashes)
+        for attempt in range(self._DELETE_VERIFY_ATTEMPTS):
+            remaining = self._existing_torrent_hashes(hashes)
+            if not remaining:
+                return set()
+            if attempt < self._DELETE_VERIFY_ATTEMPTS - 1:
+                time.sleep(self._DELETE_VERIFY_DELAY_SECONDS)
+        return remaining
     def add_torrent_url(self, u, sp=None):
         res = self.c.torrents_add(urls=u, save_path=sp)
         if isinstance(res, str) and res.strip().lower() == "fails.":

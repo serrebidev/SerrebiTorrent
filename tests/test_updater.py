@@ -3,6 +3,7 @@ import pytest
 import sys
 import os
 import zipfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -408,9 +409,58 @@ def test_launch_update_helper_is_hidden_and_uses_helper_cwd(monkeypatch, tmp_pat
     args, kwargs = popen.call_args
     assert args[0][:3] == ["cmd.exe", "/d", "/c"]
     assert kwargs["cwd"] == str(tmp_path)
+    assert kwargs["creationflags"] & 0x08000000
+    assert kwargs["creationflags"] & 0x00000200
+    assert kwargs["creationflags"] & 0x01000000
+    assert kwargs["startupinfo"].dwFlags & updater.subprocess.STARTF_USESHOWWINDOW
+    assert kwargs["startupinfo"].wShowWindow == 0
     assert kwargs["stdin"] is updater.subprocess.DEVNULL
     assert kwargs["stdout"] is updater.subprocess.DEVNULL
     assert kwargs["stderr"] is updater.subprocess.DEVNULL
+
+
+def test_launch_update_helper_retry_keeps_hidden_flags_without_breakaway(monkeypatch, tmp_path):
+    helper = tmp_path / "update_helper.bat"
+    helper.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.setenv("COMSPEC", "cmd.exe")
+    popen = MagicMock(side_effect=[OSError("job denied"), MagicMock()])
+    monkeypatch.setattr(updater.subprocess, "Popen", popen)
+
+    ok, msg = launch_update_helper(str(helper), 1234, r"C:\Install", r"C:\Stage")
+
+    assert ok, msg
+    first = popen.call_args_list[0].kwargs["creationflags"]
+    second = popen.call_args_list[1].kwargs["creationflags"]
+    assert first & 0x01000000
+    assert second & 0x08000000
+    assert second & 0x00000200
+    assert not (second & 0x01000000)
+    assert popen.call_args_list[1].kwargs["startupinfo"].wShowWindow == 0
+
+
+def test_verify_authenticode_runs_powershell_hidden(monkeypatch):
+    startup = MagicMock()
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.setattr(updater.subprocess, "STARTUPINFO", lambda: startup)
+    monkeypatch.setattr(updater.subprocess, "STARTF_USESHOWWINDOW", 1, raising=False)
+    monkeypatch.setattr(updater.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(updater, "_powershell_executables", lambda: ("powershell.exe",))
+    result = MagicMock(
+        returncode=0,
+        stdout='{"Status":"Valid","StatusMessage":"","Subject":"","Thumbprint":"' + SIGNING_THUMBPRINT + '"}',
+        stderr="",
+    )
+    run = MagicMock(return_value=result)
+    monkeypatch.setattr(updater.subprocess, "run", run)
+
+    verify_authenticode("SerrebiTorrent.exe", (SIGNING_THUMBPRINT,))
+
+    _args, kwargs = run.call_args
+    assert kwargs["creationflags"] == 0x08000000
+    assert kwargs["startupinfo"] is startup
+    assert startup.dwFlags & 1
+    assert startup.wShowWindow == 0
 
 
 def test_download_and_apply_update_launches_helper_from_temp(monkeypatch, tmp_path):
@@ -436,7 +486,7 @@ def test_download_and_apply_update_launches_helper_from_temp(monkeypatch, tmp_pa
 
     monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
     monkeypatch.setattr(updater, "_make_update_temp_root", lambda _: str(temp_root))
-    monkeypatch.setattr(updater, "download_file", lambda url, dest: open(dest, "wb").write(b"zip"))
+    monkeypatch.setattr(updater, "download_file", lambda url, dest, progress_cb=None: open(dest, "wb").write(b"zip"))
     monkeypatch.setattr(updater, "compute_sha256", lambda path: "abc")
     monkeypatch.setattr(updater, "extract_zip", lambda zip_path, dest_dir: None)
     monkeypatch.setattr(updater, "verify_authenticode", lambda exe, thumbs: None)
@@ -456,3 +506,52 @@ def test_download_and_apply_update_launches_helper_from_temp(monkeypatch, tmp_pa
     assert launched["staging"] == str(new_dir)
     assert launched["temp_root"] == str(temp_root)
     assert launched["helper"] == str(temp_root / "update_helper.bat")
+
+
+def test_download_and_apply_update_reports_progress(monkeypatch, tmp_path):
+    install = tmp_path / "SerrebiTorrent"
+    install.mkdir()
+    (install / "update_helper.bat").write_text("@echo off\n", encoding="utf-8")
+    temp_root = tmp_path / "_SerrebiTorrent_update_tmp" / "SerrebiTorrent_update_1"
+    extract = temp_root / "extract"
+    new_dir = extract / "SerrebiTorrent"
+    new_dir.mkdir(parents=True)
+    (new_dir / updater.APP_EXE_NAME).write_text("exe", encoding="utf-8")
+    info = UpdateInfo(
+        current_version="1.0.0",
+        latest_version="2.0.0",
+        manifest={
+            "asset_filename": "app.zip",
+            "download_url": ASSET_URL,
+            "sha256": "abc",
+            "signing_thumbprint": SIGNING_THUMBPRINT,
+        },
+        release={},
+    )
+
+    def fake_download(_url, dest, progress_cb=None):
+        Path(dest).write_bytes(b"zip")
+        assert progress_cb is not None
+        assert progress_cb(50, 100) is True
+        assert progress_cb(100, 100) is True
+
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updater, "_make_update_temp_root", lambda _: str(temp_root))
+    monkeypatch.setattr(updater, "download_file", fake_download)
+    monkeypatch.setattr(updater, "compute_sha256", lambda path: "abc")
+    monkeypatch.setattr(updater, "extract_zip", lambda zip_path, dest_dir: None)
+    monkeypatch.setattr(updater, "verify_authenticode", lambda exe, thumbs: None)
+    monkeypatch.setattr(updater, "launch_update_helper", lambda *args, **kwargs: (True, ""))
+    progress = []
+
+    ok, msg = download_and_apply_update(
+        info,
+        str(install),
+        progress_cb=lambda phase, fraction: progress.append((phase, fraction)) or True,
+    )
+
+    assert ok, msg
+    assert ("Downloading update...", 0.0) in progress
+    assert ("Downloading update...", 0.35) in progress
+    assert ("Downloading update...", 0.7) in progress
+    assert ("Preparing restart...", 0.98) in progress

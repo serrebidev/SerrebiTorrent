@@ -525,6 +525,21 @@ def active_torrent_hash_for_details(torrent_list):
     return hashes[0] if hashes else None
 
 
+def action_torrent_hashes(torrent_list):
+    try:
+        hashes = torrent_list.get_selected_hashes()
+    except Exception:
+        hashes = []
+    hashes = [h for h in hashes if h]
+    try:
+        focused_hash = torrent_list.get_focused_hash()
+    except Exception:
+        focused_hash = None
+    if focused_hash and (not hashes or focused_hash not in hashes):
+        return [focused_hash]
+    return hashes
+
+
 class AccessibleVirtualListMixin:
     """Keep one focused row alive across virtual-list refreshes for NVDA.
 
@@ -2606,8 +2621,11 @@ class MainFrame(wx.Frame):
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.update_check_in_progress = False
         self.update_install_in_progress = False
+        self.update_progress_dialog = None
+        self.update_progress_canceled = False
         self._auto_update_calllater = None
         self.refreshing = False
+        self.refresh_pending = False
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
         
@@ -2990,29 +3008,80 @@ class MainFrame(wx.Frame):
             wx.MessageBox("Install directory not found.", "Updates", wx.OK | wx.ICON_ERROR)
             return
         self.update_install_in_progress = True
+        self.update_progress_canceled = False
+        self._show_update_progress("Downloading update...", 0)
         if hasattr(self, "statusbar"):
             self.statusbar.SetStatusText("Downloading update...", 0)
         self.thread_pool.submit(self._perform_update_background, info, install_dir)
 
     def _perform_update_background(self, info, install_dir):
-        ok, message = updater.download_and_apply_update(info, install_dir)
+        ok, message = updater.download_and_apply_update(
+            info,
+            install_dir,
+            progress_cb=self._update_progress_callback,
+        )
         if ok:
             wx.CallAfter(self._on_update_started, message)
         else:
             wx.CallAfter(self._on_update_failed, message)
 
+    def _show_update_progress(self, message, value=0):
+        self._destroy_update_progress()
+        try:
+            self.update_progress_dialog = wx.ProgressDialog(
+                "Updating SerrebiTorrent",
+                message,
+                maximum=100,
+                parent=self,
+                style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME | wx.PD_REMAINING_TIME | wx.PD_SMOOTH,
+            )
+            self.update_progress_dialog.Update(int(value), message)
+        except Exception:
+            self.update_progress_dialog = None
+
+    def _update_progress_callback(self, phase, fraction):
+        if self.update_progress_canceled:
+            return False
+        wx.CallAfter(self._on_update_progress, phase, fraction)
+        return not self.update_progress_canceled
+
+    def _on_update_progress(self, phase, fraction):
+        message = str(phase or "Updating...")
+        if hasattr(self, "statusbar"):
+            self.statusbar.SetStatusText(message, 0)
+        dialog = self.update_progress_dialog
+        if dialog is None:
+            return
+        try:
+            if fraction is None:
+                result = dialog.Pulse(message)
+            else:
+                pct = max(0, min(100, int(float(fraction) * 100)))
+                result = dialog.Update(pct, message)
+            keep_going = result[0] if isinstance(result, tuple) else bool(result)
+            if not keep_going:
+                self.update_progress_canceled = True
+        except Exception:
+            pass
+
+    def _destroy_update_progress(self):
+        dialog = getattr(self, "update_progress_dialog", None)
+        self.update_progress_dialog = None
+        if dialog is not None:
+            try:
+                dialog.Destroy()
+            except Exception:
+                pass
+
     def _on_update_started(self, message="Update prepared. The app will restart after it exits."):
         if hasattr(self, "statusbar"):
             self.statusbar.SetStatusText("Applying update...", 0)
-        wx.MessageBox(
-            f"{message}\n\nThe app will now close to install it.",
-            "Updating",
-            wx.OK | wx.ICON_INFORMATION,
-        )
-        self.force_close()
+        self._on_update_progress("Update prepared. Closing to install...", 1.0)
+        wx.CallLater(800, self.force_close)
 
     def _on_update_failed(self, message):
         self.update_install_in_progress = False
+        self._destroy_update_progress()
         wx.MessageBox(f"Update failed: {message}", "Update Failed", wx.OK | wx.ICON_ERROR)
         if hasattr(self, "statusbar"):
             self.statusbar.SetStatusText("Update failed.", 0)
@@ -3293,6 +3362,7 @@ class MainFrame(wx.Frame):
         # Reset state before connecting
         self.timer.Stop()
         self.refreshing = False
+        self.refresh_pending = False
         self.connected = False
         self.client = None
         self.all_torrents = []
@@ -3381,7 +3451,10 @@ class MainFrame(wx.Frame):
             self.rss_panel.on_refresh_all(None)
 
     def refresh_data(self):
-        if not self.client or self.refreshing:
+        if not self.client:
+            return
+        if self.refreshing:
+            self.refresh_pending = True
             return
         
         self.refreshing = True
@@ -3464,7 +3537,11 @@ class MainFrame(wx.Frame):
 
     def _on_refresh_complete(self, generation, torrents, display_data, stats, tracker_counts, g_down, g_up):
         self.refreshing = False
-        if not self.connected or generation != self.client_generation:
+        if generation != self.client_generation:
+            self.refresh_pending = False
+            return
+        if not self.connected:
+            self.refresh_pending = False
             return
 
         with self.data_lock:
@@ -3523,12 +3600,21 @@ class MainFrame(wx.Frame):
                     self.pending_add_baseline = None
                     self.pending_auto_start_attempts = 0
                     self.pending_hash_starts.clear()
+        self._drain_pending_refresh(generation)
 
     def _on_refresh_error(self, generation, e):
         self.refreshing = False
         if generation != self.client_generation:
+            self.refresh_pending = False
             return
         print(f"Refresh error: {e}")
+        self._drain_pending_refresh(generation)
+
+    def _drain_pending_refresh(self, generation):
+        if generation != self.client_generation or not self.refresh_pending:
+            return
+        self.refresh_pending = False
+        self.refresh_data()
 
     def fetch_trackers(self):
         prefs = self.config_manager.get_preferences()
@@ -3698,7 +3784,7 @@ class MainFrame(wx.Frame):
                 self.statusbar.SetStatusText("Not connected to any client.", 0)
             return
 
-        hashes = self.torrent_list.get_selected_hashes()
+        hashes = action_torrent_hashes(self.torrent_list)
         if not hashes:
             message = f"No torrents selected to {label.lower()}."
             if hasattr(self, "statusbar"):
@@ -3845,7 +3931,7 @@ class MainFrame(wx.Frame):
             return False
 
     def _get_selected_torrent_objects(self):
-        hashes = self.torrent_list.get_selected_hashes()
+        hashes = action_torrent_hashes(self.torrent_list)
         if not hashes:
             return [], []
         tmap = {}
@@ -4039,13 +4125,13 @@ class MainFrame(wx.Frame):
         wx.CallLater(200, poll)
 
     def on_remove(self, event):
-        hashes = self.torrent_list.get_selected_hashes()
+        hashes = action_torrent_hashes(self.torrent_list)
         if hashes and wx.MessageBox(f"Remove {len(hashes)} torrents?", "Confirm", wx.YES_NO) == wx.YES:
             self.statusbar.SetStatusText("Removing torrents...", 0)
             self.thread_pool.submit(self._remove_background, self.client, self.client_generation, hashes, False)
             
     def on_remove_data(self, event):
-        hashes = self.torrent_list.get_selected_hashes()
+        hashes = action_torrent_hashes(self.torrent_list)
         if not hashes:
             return
         count = len(hashes)
@@ -4132,6 +4218,7 @@ class MainFrame(wx.Frame):
         event.Skip()
 
     def on_context_menu(self, event):
+        self._prepare_torrent_context_menu_target(event)
         menu = wx.Menu()
 
         start = menu.Append(wx.ID_ANY, "Start")
@@ -4164,6 +4251,42 @@ class MainFrame(wx.Frame):
 
         self.PopupMenu(menu)
         menu.Destroy()
+
+    def _prepare_torrent_context_menu_target(self, event):
+        try:
+            pos = event.GetPosition()
+        except Exception:
+            return
+        if getattr(pos, "x", -1) < 0 or getattr(pos, "y", -1) < 0:
+            return
+
+        try:
+            if event.GetEventType() == wx.wxEVT_CONTEXT_MENU:
+                pos = self.torrent_list.ScreenToClient(pos)
+        except Exception:
+            pass
+
+        try:
+            idx, _flags = self.torrent_list.HitTest(pos)
+        except Exception:
+            return
+        if idx == wx.NOT_FOUND or idx < 0:
+            return
+
+        try:
+            if not self.torrent_list.IsSelected(idx):
+                selected = []
+                item = self.torrent_list.GetFirstSelected()
+                while item != -1:
+                    selected.append(item)
+                    item = self.torrent_list.GetNextSelected(item)
+                for item in selected:
+                    self.torrent_list.Select(item, False)
+                self.torrent_list.Select(idx, True)
+            self.torrent_list.SetItemState(idx, wx.LIST_STATE_FOCUSED, wx.LIST_STATE_FOCUSED)
+            self.torrent_list.EnsureVisible(idx)
+        except Exception:
+            pass
 
     def try_auto_connect(self):
         default_id = self.config_manager.get_default_profile_id()

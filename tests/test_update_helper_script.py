@@ -46,8 +46,26 @@ def test_update_helper_preserves_serrebitorrent_user_data():
 def test_update_helper_relocated_batch_shell_exits_cleanly():
     text = _helper_text()
 
-    assert 'start "" /b cmd /d /c call "!TMP_HELPER!"' in text
+    assert "Start-Process -FilePath cmd.exe" in text
+    assert "-WindowStyle Hidden" in text
+    assert 'start "" /b cmd /d /c call "!TMP_HELPER!"' not in text
     assert 'start "" /b "!TMP_HELPER!"' not in text
+
+
+def test_update_helper_powershell_hosts_are_hidden():
+    text = _helper_text()
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if "powershell" in stripped.lower():
+            assert "-WindowStyle Hidden" in stripped
+
+
+def test_update_helper_relaunches_app_visible():
+    text = _helper_text()
+
+    assert 'WshShell.Run Chr(34) ^& "%INSTALL_DIR%\\%EXE_NAME%" ^& Chr(34), 1, False' in text
+    assert 'WshShell.Run Chr(34) ^& "%INSTALL_DIR%\\%EXE_NAME%" ^& Chr(34), 0, False' not in text
 
 
 def test_update_helper_accepts_and_cleans_temp_root():

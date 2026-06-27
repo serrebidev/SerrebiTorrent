@@ -88,3 +88,24 @@ def test_remove_worker_ignores_stale_generation_completion_and_errors():
     assert source.count("generation != self.client_generation") >= 2
     assert "if generation == self.client_generation:" in source
     assert "wx.CallAfter(self._on_action_complete" in source
+
+
+def test_refresh_data_queues_request_when_fetch_is_active():
+    refresh_source = inspect.getsource(main.MainFrame.refresh_data)
+    complete_source = inspect.getsource(main.MainFrame._on_refresh_complete)
+    error_source = inspect.getsource(main.MainFrame._on_refresh_error)
+
+    assert "self.refresh_pending = True" in refresh_source
+    assert "self._drain_pending_refresh(generation)" in complete_source
+    assert "self._drain_pending_refresh(generation)" in error_source
+
+
+def test_update_install_uses_single_progress_dialog():
+    start_source = inspect.getsource(main.MainFrame._start_update_install)
+    worker_source = inspect.getsource(main.MainFrame._perform_update_background)
+    started_source = inspect.getsource(main.MainFrame._on_update_started)
+
+    assert "self._show_update_progress" in start_source
+    assert "progress_cb=self._update_progress_callback" in worker_source
+    assert "wx.MessageBox" not in started_source
+    assert "wx.CallLater(800, self.force_close)" in started_source

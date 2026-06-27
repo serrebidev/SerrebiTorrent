@@ -10,10 +10,42 @@ import clients
 class FakeQbittorrentApiClient:
     def __init__(self, host=None, username=None, password=None):
         self.calls = []
+        self.deleted = set()
 
     def auth_log_in(self):
         return None
 
+    def _hash_list(self, torrent_hashes):
+        if torrent_hashes is None:
+            return []
+        if isinstance(torrent_hashes, str):
+            return torrent_hashes.split("|")
+        return list(torrent_hashes)
+
+    def torrents_info(self, torrent_hashes=None):
+        return [
+            SimpleNamespace(hash=h)
+            for h in self._hash_list(torrent_hashes)
+            if h.lower() not in self.deleted
+        ]
+
+    def torrents_start(self, torrent_hashes=None):
+        self.calls.append(("start", torrent_hashes))
+
+    def torrents_stop(self, torrent_hashes=None):
+        self.calls.append(("stop", torrent_hashes))
+
+    def torrents_delete(self, torrent_hashes=None, delete_files=False):
+        self.calls.append((torrent_hashes, delete_files))
+        self.deleted.update(h.lower() for h in self._hash_list(torrent_hashes))
+
+
+class FakeQbittorrentMissingClient(FakeQbittorrentApiClient):
+    def torrents_info(self, torrent_hashes=None):
+        return []
+
+
+class FakeQbittorrentStickyClient(FakeQbittorrentApiClient):
     def torrents_delete(self, torrent_hashes=None, delete_files=False):
         self.calls.append((torrent_hashes, delete_files))
 
@@ -45,6 +77,56 @@ class RemoveTorrentsTests(unittest.TestCase):
             torrent_hashes, delete_files = client.c.calls[0]
             self.assertEqual(torrent_hashes, [hash_bytes.decode("ascii")])
             self.assertFalse(delete_files)
+
+    def test_qbittorrent_single_remove_methods_normalize_hashes(self):
+        hash_bytes = b"0123456789abcdef0123456789abcdef01234567"
+        hash_bytes2 = b"fedcba9876543210fedcba9876543210fedcba98"
+        with mock.patch.object(clients.qbittorrentapi, "Client", FakeQbittorrentApiClient):
+            client = clients.QBittorrentClient("localhost", "user", "pass")
+            client.remove_torrent(hash_bytes)
+            client.remove_torrent_with_data(hash_bytes2)
+
+            self.assertEqual(
+                client.c.calls,
+                [
+                    ([hash_bytes.decode("ascii")], False),
+                    ([hash_bytes2.decode("ascii")], True),
+                ],
+            )
+
+    def test_qbittorrent_remove_raises_when_hash_is_absent(self):
+        with mock.patch.object(clients.qbittorrentapi, "Client", FakeQbittorrentMissingClient):
+            client = clients.QBittorrentClient("localhost", "user", "pass")
+
+            with self.assertRaisesRegex(RuntimeError, "no matching torrent"):
+                client.remove_torrent("0" * 40)
+
+            self.assertEqual(client.c.calls, [])
+
+    def test_qbittorrent_remove_raises_when_hash_remains_after_delete(self):
+        with mock.patch.object(clients.qbittorrentapi, "Client", FakeQbittorrentStickyClient):
+            client = clients.QBittorrentClient("localhost", "user", "pass")
+            client._DELETE_VERIFY_ATTEMPTS = 1
+
+            with self.assertRaisesRegex(RuntimeError, "did not remove"):
+                client.remove_torrent("0" * 40)
+
+            self.assertEqual(client.c.calls, [(["0" * 40], False)])
+
+    def test_qbittorrent_start_stop_use_v5_methods_and_normalize_hashes(self):
+        hash_bytes = b"0123456789abcdef0123456789abcdef01234567"
+        with mock.patch.object(clients.qbittorrentapi, "Client", FakeQbittorrentApiClient):
+            client = clients.QBittorrentClient("localhost", "user", "pass")
+            client.start_torrent(hash_bytes)
+            client.stop_torrent(hash_bytes)
+
+            self.assertEqual(
+                client.c.calls,
+                [
+                    ("start", hash_bytes.decode("ascii")),
+                    ("stop", hash_bytes.decode("ascii")),
+                ],
+            )
 
     def test_qbittorrent_remove_multiple_torrents_efficiently(self):
         h1 = "0000000000000000000000000000000000000001"

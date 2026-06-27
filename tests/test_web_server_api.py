@@ -113,6 +113,33 @@ def test_torrents_add_endpoint(auth_client):
     assert rv.status_code == 200
     mock_client.add_torrent_url.assert_called_with('magnet:?foo', sp='/tmp')
 
+def test_torrents_delete_endpoint_uses_bulk_remove(auth_client):
+    mock_client = MagicMock()
+    web_server.WEB_CONFIG['client'] = mock_client
+
+    rv = auth_client.post(
+        '/api/v2/torrents/delete',
+        data={'hashes': 'h1|h2', 'deleteFiles': 'true'},
+        headers=csrf_headers(auth_client),
+    )
+
+    assert rv.status_code == 200
+    mock_client.remove_torrents.assert_called_once_with(['h1', 'h2'], True)
+
+def test_torrents_delete_endpoint_reports_remove_errors(auth_client):
+    mock_client = MagicMock()
+    mock_client.remove_torrents.side_effect = RuntimeError("still present")
+    web_server.WEB_CONFIG['client'] = mock_client
+
+    rv = auth_client.post(
+        '/api/v2/torrents/delete',
+        data={'hashes': 'h1', 'deleteFiles': 'false'},
+        headers=csrf_headers(auth_client),
+    )
+
+    assert rv.status_code == 500
+    assert b"Remove failed: still present" in rv.data
+
 def test_rss_feeds_endpoint(auth_client):
     mock_app = MagicMock()
     mock_app.rss_panel.manager.feeds = {'http://feed': {'alias': 'Test'}}

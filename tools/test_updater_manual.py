@@ -12,6 +12,12 @@ from pathlib import Path
 import zipfile
 import shutil
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from updater import launch_update_helper
+
 
 class UpdateTesterApp:
     def __init__(self):
@@ -119,7 +125,8 @@ class UpdateTesterApp:
         if not self.install_dir:
             self.update_status("❌ Please setup test environment first!")
             return
-            
+        proc = type("LauncherStatus", (), {"pid": "production launcher"})()
+
         self.update_status(
             "🚀 Triggering update...\n\n"
             "WATCH YOUR SCREEN!\n"
@@ -128,34 +135,25 @@ class UpdateTesterApp:
         )
         self.root.update()
         
-        import subprocess
-        
-        # Use the same launch method as the real updater
-        helper_args = f'"{self.staging_root / "update_helper.bat"}" 999999 "{self.install_dir}" "{self.staging_dir}" "SerrebiTorrent.exe"'
-        helper_cmd = [
-            "powershell",
-            "-WindowStyle", "Hidden",
-            "-NoProfile",
-            "-Command",
-            f"Start-Process -FilePath cmd.exe -ArgumentList '/c', '{helper_args}' -WindowStyle Hidden -WorkingDirectory '{self.test_dir}'"
-        ]
-        
-        # Set environment for immediate cleanup
-        env = os.environ.copy()
-        env["SERREBITORRENT_KEEP_BACKUPS"] = "0"
-        
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0  # SW_HIDE
-        
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-        
-        proc = subprocess.Popen(
-            helper_cmd,
-            creationflags=flags,
-            startupinfo=startupinfo,
-            env=env
-        )
+        # Use the same launch method as the real updater.
+        previous_keep = os.environ.get("SERREBITORRENT_KEEP_BACKUPS")
+        os.environ["SERREBITORRENT_KEEP_BACKUPS"] = "0"
+        try:
+            ok, msg = launch_update_helper(
+                str(self.staging_root / "update_helper.bat"),
+                999999,
+                str(self.install_dir),
+                str(self.staging_dir),
+            )
+        finally:
+            if previous_keep is None:
+                os.environ.pop("SERREBITORRENT_KEEP_BACKUPS", None)
+            else:
+                os.environ["SERREBITORRENT_KEEP_BACKUPS"] = previous_keep
+
+        if not ok:
+            self.update_status(f"âŒ Failed to start update helper: {msg}")
+            return
         
         self.update_status(
             f"✓ Update process started (PID: {proc.pid})\n\n"

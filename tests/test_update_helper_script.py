@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "update_helper.bat"
 MAIN = ROOT / "main.py"
+MANUAL_TOOL = ROOT / "tools" / "test_updater_manual.py"
 
 
 def _helper_text() -> str:
@@ -116,3 +117,12 @@ def test_no_broken_param_binding_under_command():
     assert "param([string]$path" not in text
     assert "param([string]$log)" not in text
     assert "$log=[string]$env:LOG_FILE" in text
+
+
+def test_manual_updater_tool_uses_production_launcher():
+    text = MANUAL_TOOL.read_text(encoding="utf-8")
+
+    assert "from updater import launch_update_helper" in text
+    assert "launch_update_helper(" in text
+    assert "helper_cmd" not in text
+    assert "helper_args" not in text

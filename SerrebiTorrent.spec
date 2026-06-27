@@ -60,6 +60,11 @@ local_modules = [
 ]
 hiddenimports += local_modules
 
+datas = [(os.path.abspath('web_static'), 'web_static'), (os.path.abspath('update_helper.bat'), '.')]
+if os.path.exists('icon.ico'):
+    datas.append((os.path.abspath('icon.ico'), '.'))
+datas += collect_data_files('flask')
+
 a = Analysis(
     ['main.py'],
     pathex=[os.path.abspath('.')],
@@ -71,7 +76,7 @@ a = Analysis(
         ('libcrypto-1_1.dll', '.'),
         ('libssl-1_1.dll', '.'),
     ],
-    datas=[(os.path.abspath('web_static'), 'web_static'), (os.path.abspath('update_helper.bat'), '.')] + collect_data_files('flask'),
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[os.path.abspath('hooks')],
     hooksconfig={},

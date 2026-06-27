@@ -8,6 +8,7 @@ import sys
 from typing import Iterable, List, Set
 
 _BOOTSTRAPPED = False
+_DLL_DIRECTORY_HANDLES = []
 
 
 def _unique_existing_paths(paths: Iterable[str | None]) -> List[str]:
@@ -74,7 +75,7 @@ def prepare_libtorrent_dlls() -> None:
             path_parts.insert(0, path)
         if hasattr(os, "add_dll_directory"):
             try:
-                os.add_dll_directory(path)
+                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(path))
             except (FileNotFoundError, OSError):
                 pass
 

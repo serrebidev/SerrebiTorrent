@@ -1992,6 +1992,7 @@ class TorrentDetailsPanel(wx.Panel):
         self.notebook.AddPage(self.files_panel, "Files")
         self.notebook.AddPage(self.peers_panel, "Peers")
         self.notebook.AddPage(self.trackers_panel, "Trackers")
+        self._refresh_inflight = set()
         
         sizer.Add(self.notebook, 1, wx.EXPAND)
         self.SetSizer(sizer)
@@ -2010,38 +2011,59 @@ class TorrentDetailsPanel(wx.Panel):
         sel = self.notebook.GetSelection()
         client = self.frame.client
         generation = self.frame.client_generation
+        key = (generation, self.current_hash, sel)
+        if key in self._refresh_inflight:
+            return
+        self._refresh_inflight.add(key)
         if sel == 0: # Files
-            self.frame.thread_pool.submit(self._fetch_files, client, generation, self.current_hash)
+            self._submit_detail_fetch(self._fetch_files, client, generation, self.current_hash, key)
         elif sel == 1: # Peers
-            self.frame.thread_pool.submit(self._fetch_peers, client, generation, self.current_hash)
+            self._submit_detail_fetch(self._fetch_peers, client, generation, self.current_hash, key)
         elif sel == 2: # Trackers
-            self.frame.thread_pool.submit(self._fetch_trackers, client, generation, self.current_hash)
+            self._submit_detail_fetch(self._fetch_trackers, client, generation, self.current_hash, key)
+        else:
+            self._refresh_inflight.discard(key)
+
+    def _submit_detail_fetch(self, worker, client, generation, info_hash, key):
+        try:
+            self.frame.thread_pool.submit(worker, client, generation, info_hash, key)
+        except RuntimeError:
+            self._refresh_inflight.discard(key)
 
     def _apply_detail_data(self, info_hash, generation, setter, data):
         if generation != self.frame.client_generation or info_hash != self.current_hash:
             return
         setter(data)
 
-    def _fetch_files(self, client, generation, info_hash):
+    def _finish_detail_refresh(self, key):
+        self._refresh_inflight.discard(key)
+
+    def _fetch_files(self, client, generation, info_hash, key):
         try:
             files = client.get_files(info_hash)
             wx.CallAfter(self._apply_detail_data, info_hash, generation, self.files_list.set_data, files)
         except Exception:
             pass
+        finally:
+            wx.CallAfter(self._finish_detail_refresh, key)
 
-    def _fetch_peers(self, client, generation, info_hash):
+    def _fetch_peers(self, client, generation, info_hash, key):
         try:
             peers = client.get_peers(info_hash)
             wx.CallAfter(self._apply_detail_data, info_hash, generation, self.peers_list.set_data, peers)
         except Exception:
             pass
+        finally:
+            wx.CallAfter(self._finish_detail_refresh, key)
 
-    def _fetch_trackers(self, client, generation, info_hash):
+    def _fetch_trackers(self, client, generation, info_hash, key):
         try:
             trackers = client.get_trackers(info_hash)
             wx.CallAfter(self._apply_detail_data, info_hash, generation, self.trackers_list.set_data, trackers)
         except Exception:
             pass
+        finally:
+            wx.CallAfter(self._finish_detail_refresh, key)
 
     def on_files_context_menu(self, event):
         if not self.files_list.GetSelectedItemCount():
@@ -2092,7 +2114,9 @@ class TorrentDetailsPanel(wx.Panel):
             
             # Refresh
             if generation == self.frame.client_generation and info_hash == self.current_hash:
-                self._fetch_files(client, generation, info_hash)
+                key = (generation, info_hash, 0)
+                self._refresh_inflight.add(key)
+                self._fetch_files(client, generation, info_hash, key)
         except Exception:
             pass
 
@@ -2618,6 +2642,7 @@ class MainFrame(wx.Frame):
         self.pending_auto_start_attempts = 0
         self.pending_hash_starts = set()
         self.pending_cli_arg = None
+        self._closing = False
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.update_check_in_progress = False
         self.update_install_in_progress = False
@@ -3307,6 +3332,9 @@ class MainFrame(wx.Frame):
             wx.CallAfter(wx.LogError, f"Failed to update remote preferences: {e}")
 
     def on_minimize(self, event):
+        if hasattr(event, "IsIconized") and not event.IsIconized():
+            event.Skip()
+            return
         prefs = self.config_manager.get_preferences()
         if prefs.get('min_to_tray', True):
             self.Hide()
@@ -3324,6 +3352,8 @@ class MainFrame(wx.Frame):
         self.force_close()
 
     def force_close(self):
+        self._closing = True
+        self.client_generation += 1
         try:
             self.timer.Stop()
             self.rss_timer.Stop()
@@ -3374,6 +3404,7 @@ class MainFrame(wx.Frame):
         self.pending_auto_start_attempts = 0
         self.pending_hash_starts = set()
         self._update_remote_prefs_menu_state()
+        self._update_web_ui()
         
         generation = self.client_generation
         self.thread_pool.submit(self._connect_profile_background, p, generation)
@@ -3410,6 +3441,7 @@ class MainFrame(wx.Frame):
             self.client = None
             self.statusbar.SetStatusText("Connection Failed", 0)
             self._update_remote_prefs_menu_state()
+            self._update_web_ui()
             return
 
         self.client = client
@@ -3451,6 +3483,8 @@ class MainFrame(wx.Frame):
             self.rss_panel.on_refresh_all(None)
 
     def refresh_data(self):
+        if self._closing:
+            return
         if not self.client:
             return
         if self.refreshing:
@@ -3537,6 +3571,9 @@ class MainFrame(wx.Frame):
 
     def _on_refresh_complete(self, generation, torrents, display_data, stats, tracker_counts, g_down, g_up):
         self.refreshing = False
+        if self._closing:
+            self.refresh_pending = False
+            return
         if generation != self.client_generation:
             self.refresh_pending = False
             return
@@ -3604,6 +3641,9 @@ class MainFrame(wx.Frame):
 
     def _on_refresh_error(self, generation, e):
         self.refreshing = False
+        if self._closing:
+            self.refresh_pending = False
+            return
         if generation != self.client_generation:
             self.refresh_pending = False
             return
@@ -3611,6 +3651,9 @@ class MainFrame(wx.Frame):
         self._drain_pending_refresh(generation)
 
     def _drain_pending_refresh(self, generation):
+        if self._closing:
+            self.refresh_pending = False
+            return
         if generation != self.client_generation or not self.refresh_pending:
             return
         self.refresh_pending = False
@@ -3727,20 +3770,28 @@ class MainFrame(wx.Frame):
                             )
                         adlg.Destroy()
                     elif url.startswith(("http://", "https://")):
+                        client = self.client
+                        generation = self.client_generation
                         self.statusbar.SetStatusText("Downloading torrent file...", 0)
-                        self.thread_pool.submit(self._download_and_add_torrent, url, default_path)
+                        self.thread_pool.submit(self._download_and_add_torrent, url, default_path, client, generation)
                 except Exception as e:
                     wx.LogError(f"Error adding URL: {e}")
         dlg.Destroy()
 
-    def _download_and_add_torrent(self, url, default_path):
+    def _download_and_add_torrent(self, url, default_path, client=None, generation=None):
         try:
             data = download_torrent_url(url)
-            wx.CallAfter(self._show_add_after_download, data, default_path)
+            wx.CallAfter(self._show_add_after_download, data, default_path, client, generation)
         except Exception as e:
             wx.CallAfter(wx.LogError, f"Failed to download torrent from URL: {e}")
 
-    def _show_add_after_download(self, data, default_path):
+    def _show_add_after_download(self, data, default_path, client=None, generation=None):
+        if generation is not None and generation != self.client_generation:
+            wx.LogError("Torrent download finished after the active profile changed.")
+            return
+        if client is None:
+            client = self.client
+            generation = self.client_generation
         file_list = []
         name = "Unknown"
         if lt:
@@ -3757,15 +3808,13 @@ class MainFrame(wx.Frame):
             save_path = adlg.get_selected_path() or None
             priorities = adlg.get_file_priorities()
             hash_hint = self._maybe_hash_from_torrent_bytes(data)
-            if not self.client:
+            if not client or generation != self.client_generation:
                 wx.LogError("Not connected to any client.")
                 adlg.Destroy()
                 return
             self._prepare_auto_start()
             if hash_hint:
                 self.pending_hash_starts.add(hash_hint)
-            generation = self.client_generation
-            client = self.client
             self.statusbar.SetStatusText("Adding torrent...", 0)
             self.thread_pool.submit(
                 self._add_torrent_file_background,
@@ -4163,12 +4212,16 @@ class MainFrame(wx.Frame):
                 wx.CallAfter(self._on_action_error, f"Remove failed: {e}")
 
     def _on_action_complete(self, msg):
+        if self._closing:
+            return
         self.statusbar.SetStatusText(msg, 0)
         self.refresh_data()
 
     def _on_action_error(self, msg):
-         wx.MessageBox(msg, "Error", wx.OK | wx.ICON_ERROR)
-         self.statusbar.SetStatusText("Error occurred", 0)
+        if self._closing:
+            return
+        wx.MessageBox(msg, "Error", wx.OK | wx.ICON_ERROR)
+        self.statusbar.SetStatusText("Error occurred", 0)
 
     def on_select_all(self, event):
         count = self.torrent_list.GetItemCount()
@@ -4312,7 +4365,6 @@ if __name__ == "__main__":
         print("Starting application...")
         app = wx.App(False) # False = don't redirect stdout/stderr to window
         print("wx.App initialized.")
-        updater.cleanup_update_artifacts()
 
         # Single Instance Check
         name = f"SerrebiTorrent-{wx.GetUserId()}"
@@ -4320,6 +4372,7 @@ if __name__ == "__main__":
         if checker.IsAnotherRunning():
             wx.MessageBox("Another instance of SerrebiTorrent is already running.", "Error", wx.OK | wx.ICON_ERROR)
             sys.exit(0)
+        updater.cleanup_update_artifacts()
 
         frame = MainFrame()
         print("MainFrame initialized.")

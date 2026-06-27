@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import glob
 import hashlib
 import json
 import os
@@ -32,6 +31,7 @@ MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_UPDATE_ZIP_MEMBER_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_ZIP_MEMBERS = 20000
+BACKUP_RETENTION_GRACE_SECONDS = 300
 
 _SEMVER_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 _STRICT_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
@@ -444,7 +444,7 @@ def verify_authenticode(exe_path: str, allowed_thumbprints: Iterable[str]) -> No
     ps_script = (
         "$ErrorActionPreference = 'Stop';"
         "Import-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue;"
-        f"$sig = Get-AuthenticodeSignature -FilePath {_ps_single_quote(exe_path)};"
+        f"$sig = Get-AuthenticodeSignature -LiteralPath {_ps_single_quote(exe_path)};"
         "$subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' };"
         "$thumb = if ($sig.SignerCertificate) { $sig.SignerCertificate.Thumbprint } else { '' };"
         "$out = @{Status=$sig.Status.ToString(); StatusMessage=$sig.StatusMessage; Subject=$subject; Thumbprint=$thumb};"
@@ -498,11 +498,25 @@ def verify_authenticode(exe_path: str, allowed_thumbprints: Iterable[str]) -> No
     raise UpdateError("Authenticode verification failed: PowerShell was not found.")
 
 
+def find_update_helper(install_dir: Optional[str] = None) -> Optional[str]:
+    install_dir = os.path.abspath(install_dir or os.path.dirname(sys.executable))
+    candidates = [
+        os.path.join(install_dir, "update_helper.bat"),
+        os.path.join(install_dir, "_internal", "update_helper.bat"),
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(str(meipass), "update_helper.bat"))
+    for path in _dedupe_paths(candidates):
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def is_update_supported(install_dir: Optional[str] = None) -> bool:
     if not getattr(sys, "frozen", False):
         return False
-    install_dir = install_dir or os.path.dirname(sys.executable)
-    return os.path.isfile(os.path.join(install_dir, "update_helper.bat"))
+    return find_update_helper(install_dir) is not None
 
 
 def _make_update_temp_root(install_dir: str) -> str:
@@ -549,15 +563,46 @@ def _safe_remove_dir(path: str, install_dir: str, reason: str) -> None:
         pass
 
 
-def cleanup_update_artifacts(install_dir: Optional[str] = None) -> None:
+def _backup_keep_count() -> int:
+    raw = os.environ.get("SERREBITORRENT_KEEP_BACKUPS", "1")
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _backup_dirs_for_install(install_dir: str) -> Tuple[str, ...]:
+    parent_dir = os.path.dirname(install_dir)
+    install_base = os.path.basename(install_dir).lower()
+    prefix = f"{install_base}_backup_"
+    try:
+        names = os.listdir(parent_dir)
+    except Exception:
+        return ()
+    paths = []
+    for name in names:
+        path = os.path.join(parent_dir, name)
+        if name.lower().startswith(prefix) and os.path.isdir(path):
+            paths.append(path)
+    paths.sort(key=lambda p: (os.path.getmtime(p), os.path.basename(p).lower()), reverse=True)
+    return tuple(paths)
+
+
+def cleanup_update_artifacts(install_dir: Optional[str] = None, now: Optional[float] = None) -> None:
     if not getattr(sys, "frozen", False):
         return
     install_dir = os.path.abspath(install_dir or os.path.dirname(sys.executable))
     parent_dir = os.path.dirname(install_dir)
-    install_base = os.path.basename(install_dir).lower()
-    for path in glob.glob(f"{install_dir}_backup_*"):
-        base = os.path.basename(path).lower()
-        if base.startswith(f"{install_base}_backup_"):
+    keep_backups = _backup_keep_count()
+    now = time.time() if now is None else now
+    for index, path in enumerate(_backup_dirs_for_install(install_dir)):
+        if keep_backups > 0 and index < keep_backups:
+            continue
+        try:
+            age = now - os.path.getmtime(path)
+        except Exception:
+            age = BACKUP_RETENTION_GRACE_SECONDS
+        if keep_backups == 0 or age >= BACKUP_RETENTION_GRACE_SECONDS:
             _safe_remove_dir(path, install_dir, "backup")
     update_tmp_parent = os.path.join(parent_dir, "_SerrebiTorrent_update_tmp")
     try:
@@ -698,10 +743,8 @@ def download_and_apply_update(info: UpdateInfo, install_dir: Optional[str] = Non
             return False, UPDATE_CANCELED_MESSAGE
         verify_authenticode(new_exe, get_allowed_thumbprints(info.manifest))
 
-        helper_src = os.path.join(new_dir, "update_helper.bat")
-        if not os.path.isfile(helper_src):
-            helper_src = os.path.join(install_dir, "update_helper.bat")
-        if not os.path.isfile(helper_src):
+        helper_src = find_update_helper(new_dir) or find_update_helper(install_dir)
+        if not helper_src:
             return False, "Update helper script not found."
         helper_run_path = os.path.join(temp_root, "update_helper.bat")
         try:

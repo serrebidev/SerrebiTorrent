@@ -32,12 +32,27 @@ pushd "%ROOT%"
 
 %PYTHON_CMD% --version >nul 2>&1 || (echo Python 3.14 not found.& goto :error)
 
+if /I "%MODE%"=="release" if defined SIGN_CERT_THUMBPRINT (
+    set "SIGN_CERT_THUMBPRINT=%SIGN_CERT_THUMBPRINT: =%"
+)
+
 if /I "%MODE%"=="release" (
     where git >nul 2>&1 || (echo Git not found in PATH.& goto :error)
     where gh >nul 2>&1 || (echo GitHub CLI ^(gh^) not found in PATH.& goto :error)
     call :detect_github
     call :ensure_tracked_tree_clean || goto :error
     call :ensure_packageable_untracked_clean || goto :error
+)
+
+if /I "%MODE%"=="release" (
+    echo Fetching tags...
+    git fetch --tags
+    if errorlevel 1 (
+        echo Failed to fetch tags.
+        goto :error
+    )
+)
+if /I "%MODE%"=="dry-run" (
     echo Fetching tags...
     git fetch --tags
     if errorlevel 1 (
@@ -110,12 +125,13 @@ if not exist "%SIGNTOOL_PATH%" (
 
 pushd "dist\%APP_NAME%"
 echo Signing %EXE_NAME%...
-"%SIGNTOOL_PATH%" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a ".\%EXE_NAME%"
+set "SIGNTOOL_CERT_ARGS=/a"
+if defined SIGN_CERT_THUMBPRINT (
+    set "SIGNTOOL_CERT_ARGS=/sha1 %SIGN_CERT_THUMBPRINT%"
+)
+"%SIGNTOOL_PATH%" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 %SIGNTOOL_CERT_ARGS% ".\%EXE_NAME%"
 if errorlevel 1 (popd & goto :error)
 popd
-if defined SIGN_CERT_THUMBPRINT (
-    set "SIGN_CERT_THUMBPRINT=%SIGN_CERT_THUMBPRINT: =%"
-)
 
 set "ZIP_NAME=%APP_NAME%-v%NEXT_VERSION%.zip"
 set "ZIP_PATH=%CD%\dist\%ZIP_NAME%"
@@ -125,6 +141,7 @@ if errorlevel 1 goto :error
 
 echo Creating latest ZIP: %APP_NAME%.zip
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\%APP_NAME%' -DestinationPath 'dist\%APP_NAME%.zip' -Force"
+if errorlevel 1 goto :error
 
 if /I "%MODE%"=="release" (
     call :create_manifest || goto :error
@@ -267,6 +284,7 @@ gh release create "v%NEXT_VERSION%" "%ZIP_PATH%" "%MANIFEST_PATH%" ^
     --latest
 if errorlevel 1 (
     echo GitHub release creation failed.
+    call :delete_draft_releases
     exit /b 1
 )
 echo Ensuring v%NEXT_VERSION% is published and marked as Latest...

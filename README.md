@@ -58,6 +58,7 @@ Versioning uses the latest `vMAJOR.MINOR.PATCH` tag as the base. If none exists,
 Commands:
 - `git clone https://github.com/serrebidev/SerrebiTorrent`
 - `python -m pip install -r requirements.txt`
+- Ensure the Python 3.14 Windows `libtorrent` extension and its DLLs are installed or available on `PATH`; it is not installed from PyPI.
 - `build_exe.bat build`
 
 Build output lands in `dist\SerrebiTorrent\`. For distribution, zip the entire `SerrebiTorrent` folder (not just the EXE).
@@ -87,7 +88,7 @@ SerrebiTorrent includes automatic update functionality:
    - Applies update by moving new files to install directory
    - Restarts the app
 4. Backup cleanup runs automatically:
-   - **Default:** Keeps 1 backup (newest) and deletes it after 5-minute grace period
+   - **Default:** Keeps 1 backup (newest); retention cleanup starts after a 5-minute grace period
    - **Immediate:** Set `SERREBITORRENT_KEEP_BACKUPS=0` to delete backup immediately after successful update
    - **Multiple:** Set `SERREBITORRENT_KEEP_BACKUPS=N` to keep N most recent backups
 

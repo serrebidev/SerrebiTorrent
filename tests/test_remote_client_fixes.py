@@ -6,6 +6,7 @@ import clients
 class FakeRTorrentD:
     def __init__(self):
         self.erase_calls = []
+        self.calls = []
 
     def multicall2(self, *args):
         return [[
@@ -29,8 +30,27 @@ class FakeRTorrentD:
             "C:\\Downloads",
         ]]
 
+    def open(self, h):
+        self.calls.append(("open", h))
+
+    def start(self, h):
+        self.calls.append(("start", h))
+
+    def stop(self, h):
+        self.calls.append(("stop", h))
+
+    def close(self, h):
+        self.calls.append(("close", h))
+
     def erase(self, h):
         self.erase_calls.append(h)
+        self.calls.append(("erase", h))
+
+    def check_hash(self, h):
+        self.calls.append(("check_hash", h))
+
+    def tracker_announce(self, h):
+        self.calls.append(("tracker_announce", h))
 
 
 class FakeRTorrentServer:
@@ -62,6 +82,29 @@ def test_rtorrent_remove_with_data_is_unsupported():
         client.remove_torrent_with_data("a" * 40)
 
     assert client.srv.d.erase_calls == []
+
+
+def test_rtorrent_actions_normalize_raw_hash_bytes():
+    raw_hash = b"\x04" * 20
+    expected_hash = raw_hash.hex()
+    client = clients.RTorrentClient("http://localhost/RPC2")
+    client.srv = FakeRTorrentServer()
+
+    client.start_torrent(raw_hash)
+    client.stop_torrent(raw_hash)
+    client.remove_torrent(raw_hash)
+    client.recheck_torrent(raw_hash)
+    client.reannounce_torrent(raw_hash)
+
+    assert client.srv.d.calls == [
+        ("open", expected_hash),
+        ("start", expected_hash),
+        ("stop", expected_hash),
+        ("close", expected_hash),
+        ("erase", expected_hash),
+        ("check_hash", expected_hash),
+        ("tracker_announce", expected_hash),
+    ]
 
 
 def test_rtorrent_set_preferences_propagates_rpc_errors():

@@ -409,14 +409,17 @@ class RTorrentClient(BaseClient):
             return []
 
     def start_torrent(self, h):
+        h = self._normalize_hash(h)
         self.srv.d.open(h)
         self.srv.d.start(h)
 
     def stop_torrent(self, h):
+        h = self._normalize_hash(h)
         self.srv.d.stop(h)
         self.srv.d.close(h)
 
     def remove_torrent(self, h):
+        h = self._normalize_hash(h)
         self.srv.d.erase(h)
 
     def remove_torrent_with_data(self, h):
@@ -492,15 +495,19 @@ class RTorrentClient(BaseClient):
             self._rpc(method, val, suppress_errors=False)
 
     def recheck_torrent(self, h):
+        h = self._normalize_hash(h)
         self.srv.d.check_hash(h)
 
     def reannounce_torrent(self, h):
+        h = self._normalize_hash(h)
         self.srv.d.tracker_announce(h)
 
     def get_torrent_save_path(self, h):
+        h = self._normalize_hash(h)
         return self.srv.d.directory(h)
 
     def get_files(self, h):
+        h = self._normalize_hash(h)
         try:
             r = self.srv.f.multicall(h, "", "f.get_path=", "f.get_size_bytes=", "f.get_priority=", "f.get_completed_chunks=", "f.get_size_chunks=")
             return [{"index": i, "name": x[0], "size": x[1], "progress": x[3]/x[4] if x[4]>0 else 0, "priority": x[2]} for i, x in enumerate(r)]
@@ -508,10 +515,12 @@ class RTorrentClient(BaseClient):
             return []
 
     def set_file_priority(self, h, i, p):
+        h = self._normalize_hash(h)
         self.srv.f.priority.set(h, i, p)
         self.srv.d.update_priorities(h)
 
     def get_peers(self, h):
+        h = self._normalize_hash(h)
         try:
             r = self.srv.p.multicall(h, "", "p.address=", "p.client_version=", "p.completed_percent=", "p.down_rate=", "p.up_rate=")
             return [{"address": str(x[0]), "client": str(x[1]), "progress": float(x[2])/100.0, "down_rate": int(x[3]), "up_rate": int(x[4])} for x in r]
@@ -519,6 +528,7 @@ class RTorrentClient(BaseClient):
             return []
 
     def get_trackers(self, h):
+        h = self._normalize_hash(h)
         try:
             r = self.srv.t.multicall(h, "", "t.url=", "t.is_enabled=", "t.scrape_complete=")
             return [{"url": str(x[0]), "status": "Enabled" if x[1] else "Disabled", "peers": int(x[2]) if x[2] else 0, "message": ""} for x in r]
@@ -614,8 +624,8 @@ class QBittorrentClient(BaseClient):
         res = self.c.torrents_add(torrent_files=c, save_path=sp)
         if isinstance(res, str) and res.strip().lower() == "fails.":
             raise RuntimeError("qBittorrent rejected the torrent file (Fails.)")
-    def recheck_torrent(self, h): self.c.torrents_recheck(torrent_hashes=h)
-    def reannounce_torrent(self, h): self.c.torrents_reannounce(torrent_hashes=h)
+    def recheck_torrent(self, h): self.c.torrents_recheck(torrent_hashes=self._normalize_hash(h))
+    def reannounce_torrent(self, h): self.c.torrents_reannounce(torrent_hashes=self._normalize_hash(h))
     def get_global_stats(self):
         i = self.c.transfer_info()
         return i.dl_info_speed, i.up_info_speed
@@ -633,16 +643,20 @@ class QBittorrentClient(BaseClient):
             return
         self.c.app_set_preferences(prefs=p)
     def get_torrent_save_path(self, h):
+        h = self._normalize_hash(h)
         inf = self.c.torrents_info(torrent_hashes=h)
         return inf[0].get('save_path') if inf else None
     def get_files(self, h):
+        h = self._normalize_hash(h)
         fs = self.c.torrents_files(torrent_hash=h)
         return [{"index": i, "name": f.name, "size": f.size, "progress": f.progress, "priority": 1 if f.priority==1 else (2 if f.priority>=6 else 0)} for i, f in enumerate(fs)]
-    def set_file_priority(self, h, i, p): self.c.torrents_file_priority(torrent_hash=h, file_ids=i, priority=(1 if p==1 else (7 if p==2 else 0)))
+    def set_file_priority(self, h, i, p): self.c.torrents_file_priority(torrent_hash=self._normalize_hash(h), file_ids=i, priority=(1 if p==1 else (7 if p==2 else 0)))
     def get_peers(self, h):
+        h = self._normalize_hash(h)
         pd = self.c.sync_torrent_peers(torrent_hash=h)
         return [{"address": k, "client": v.get('client','?'), "progress": v.get('progress',0), "down_rate": v.get('dl_speed',0), "up_rate": v.get('up_speed',0)} for k,v in pd.get('peers',{}).items()]
     def get_trackers(self, h):
+        h = self._normalize_hash(h)
         ts = self.c.torrents_trackers(torrent_hash=h)
         return [{"url": t.get('url',''), "status": t.get('status_desc','?'), "peers": t.get('num_peers',0), "message": t.get('msg','')} for t in ts]
 
@@ -769,17 +783,40 @@ class TransmissionClient(BaseClient):
             print(f"Transmission error: {e}")
             return []
 
-    def start_torrent(self, h): self.c.start_torrent(h)
-    def stop_torrent(self, h): self.c.stop_torrent(h)
-    def remove_torrent(self, h): self.c.remove_torrent(h, delete_data=False)
-    def remove_torrent_with_data(self, h): self.c.remove_torrent(h, delete_data=True)
+    def _normalize_torrent_id(self, h):
+        if isinstance(h, int) and not isinstance(h, bool):
+            return h
+        return self._normalize_hash(h)
+
+    def _normalize_torrent_ids(self, hs):
+        if hs is None:
+            return []
+        if isinstance(hs, (str, bytes, bytearray, memoryview)) or isinstance(hs, int):
+            hs = [hs]
+        out = []
+        for h in hs:
+            if h is None:
+                continue
+            normalized = self._normalize_torrent_id(h)
+            if normalized not in (None, ""):
+                out.append(normalized)
+        return out
+
+    def start_torrent(self, h): self.c.start_torrent(self._normalize_torrent_id(h))
+    def stop_torrent(self, h): self.c.stop_torrent(self._normalize_torrent_id(h))
+    def remove_torrent(self, h): self.c.remove_torrent(self._normalize_torrent_id(h), delete_data=False)
+    def remove_torrent_with_data(self, h): self.c.remove_torrent(self._normalize_torrent_id(h), delete_data=True)
+    def remove_torrents(self, hs, df=False):
+        delete_data = self._normalize_delete_files(df)
+        for h in self._normalize_torrent_ids(hs):
+            self.c.remove_torrent(h, delete_data=delete_data)
     def add_torrent_url(self, u, sp=None): self.c.add_torrent(u, download_dir=sp)
     def add_torrent_file(self, c, sp=None, p=None):
         # Pass raw .torrent bytes; transmission_rpc base64-encodes them into metainfo.
         # (Passing a base64 *string* makes v4 treat it as a filename and silently fail.)
         self.c.add_torrent(c, download_dir=sp)
-    def recheck_torrent(self, h): self.c.verify_torrent(h)
-    def reannounce_torrent(self, h): self.c.reannounce_torrent(h)
+    def recheck_torrent(self, h): self.c.verify_torrent(self._normalize_torrent_id(h))
+    def reannounce_torrent(self, h): self.c.reannounce_torrent(self._normalize_torrent_id(h))
     def get_global_stats(self):
         s = self.c.session_stats()
         return s.download_speed, s.upload_speed
@@ -850,10 +887,12 @@ class TransmissionClient(BaseClient):
         if mapping:
             self.c.set_session(**mapping)
     def get_torrent_save_path(self, h):
+        h = self._normalize_torrent_id(h)
         t = self.c.get_torrent(h)
         return self._field(t, 'download_dir', 'downloadDir', default=None)
 
     def get_files(self, h):
+        h = self._normalize_torrent_id(h)
         t = self.c.get_torrent(h, arguments=['files', 'fileStats'])
         res = []
         files = self._collection(self._field(t, "files", default=[]))
@@ -872,6 +911,7 @@ class TransmissionClient(BaseClient):
         return res
 
     def set_file_priority(self, h, i, p):
+        h = self._normalize_torrent_id(h)
         args = {}
         if p == 0:
             args['files_unwanted'] = [i]
@@ -881,6 +921,7 @@ class TransmissionClient(BaseClient):
         self.c.change_torrent(h, **args)
 
     def get_peers(self, h):
+        h = self._normalize_torrent_id(h)
         t = self.c.get_torrent(h, arguments=['peers'])
         raw_peers = self._field(t, "peers", default=[])
         peer_items = raw_peers.items() if isinstance(raw_peers, dict) else [(None, p) for p in (raw_peers or [])]
@@ -896,6 +937,7 @@ class TransmissionClient(BaseClient):
         return res
 
     def get_trackers(self, h):
+        h = self._normalize_torrent_id(h)
         t = self.c.get_torrent(h, arguments=['trackerStats'])
         stats = self._collection(self._field(t, "tracker_stats", "trackerStats", default=[]))
         return [{"url": self._field(s, "announce", "url", default=""), "status": "Active" if self._bool(self._field(s, "has_announced", "hasAnnounced", default=False)) else "?", "peers": self._int(self._field(s, "peer_count", "peerCount", default=0)), "message": self._field(s, "last_announce_result", "lastAnnounceResult", default="") or ''} for s in stats]

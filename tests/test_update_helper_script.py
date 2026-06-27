@@ -43,6 +43,14 @@ def test_update_helper_preserves_serrebitorrent_user_data():
     assert "SERREBITORRENT_KEEP_BACKUPS" in text
 
 
+def test_update_helper_retention_does_not_always_delete_new_backup():
+    text = _helper_text()
+
+    assert "Clean up the just-created backup after grace period" not in text
+    assert "Select-Object -Skip $keep" in text
+    assert "Remove-Item -LiteralPath $_.FullName" in text
+
+
 def test_update_helper_relocated_batch_shell_exits_cleanly():
     text = _helper_text()
 
@@ -80,6 +88,12 @@ def test_startup_cleans_leftover_update_artifacts():
     text = MAIN.read_text(encoding="utf-8")
 
     assert "updater.cleanup_update_artifacts()" in text
+
+
+def test_startup_cleanup_runs_after_single_instance_check():
+    text = MAIN.read_text(encoding="utf-8")
+
+    assert text.index("checker.IsAnotherRunning()") < text.index("updater.cleanup_update_artifacts()")
 
 
 def test_temp_cleanup_binds_paths_via_env_not_broken_param():

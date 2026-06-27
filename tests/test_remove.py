@@ -35,6 +35,12 @@ class FakeQbittorrentApiClient:
     def torrents_stop(self, torrent_hashes=None):
         self.calls.append(("stop", torrent_hashes))
 
+    def torrents_recheck(self, torrent_hashes=None):
+        self.calls.append(("recheck", torrent_hashes))
+
+    def torrents_reannounce(self, torrent_hashes=None):
+        self.calls.append(("reannounce", torrent_hashes))
+
     def torrents_delete(self, torrent_hashes=None, delete_files=False):
         self.calls.append((torrent_hashes, delete_files))
         self.deleted.update(h.lower() for h in self._hash_list(torrent_hashes))
@@ -54,8 +60,20 @@ class FakeTransmissionApiClient:
     def __init__(self, host=None, port=None, username=None, password=None, protocol=None, path=None):
         self.calls = []
 
+    def start_torrent(self, torrent_id):
+        self.calls.append(("start", torrent_id))
+
+    def stop_torrent(self, torrent_id):
+        self.calls.append(("stop", torrent_id))
+
     def remove_torrent(self, torrent_id, delete_data=False):
         self.calls.append((torrent_id, delete_data))
+
+    def verify_torrent(self, torrent_id):
+        self.calls.append(("verify", torrent_id))
+
+    def reannounce_torrent(self, torrent_id):
+        self.calls.append(("reannounce", torrent_id))
 
 
 class FakeSession:
@@ -128,6 +146,21 @@ class RemoveTorrentsTests(unittest.TestCase):
                 ],
             )
 
+    def test_qbittorrent_recheck_reannounce_normalize_hashes(self):
+        hash_bytes = b"0123456789abcdef0123456789abcdef01234567"
+        with mock.patch.object(clients.qbittorrentapi, "Client", FakeQbittorrentApiClient):
+            client = clients.QBittorrentClient("localhost", "user", "pass")
+            client.recheck_torrent(hash_bytes)
+            client.reannounce_torrent(hash_bytes)
+
+            self.assertEqual(
+                client.c.calls,
+                [
+                    ("recheck", hash_bytes.decode("ascii")),
+                    ("reannounce", hash_bytes.decode("ascii")),
+                ],
+            )
+
     def test_qbittorrent_remove_multiple_torrents_efficiently(self):
         h1 = "0000000000000000000000000000000000000001"
         h2 = "0000000000000000000000000000000000000002"
@@ -147,6 +180,35 @@ class RemoveTorrentsTests(unittest.TestCase):
             client.remove_torrents(["abc123"], df="false")
 
             self.assertEqual(client.c.calls, [("abc123", False)])
+
+    def test_transmission_remove_torrents_preserves_numeric_ids_and_normalizes_bytes(self):
+        raw_hash = b"\x02" * 20
+        expected_hash = binascii.hexlify(raw_hash).decode("ascii")
+        with mock.patch.object(clients, "TransClient", FakeTransmissionApiClient):
+            client = clients.TransmissionClient("http://localhost:9091", "user", "pass")
+            client.remove_torrents([7, raw_hash], df=True)
+
+            self.assertEqual(client.c.calls, [(7, True), (expected_hash, True)])
+
+    def test_transmission_single_actions_normalize_bytes(self):
+        raw_hash = b"\x03" * 20
+        expected_hash = binascii.hexlify(raw_hash).decode("ascii")
+        with mock.patch.object(clients, "TransClient", FakeTransmissionApiClient):
+            client = clients.TransmissionClient("http://localhost:9091", "user", "pass")
+            client.start_torrent(raw_hash)
+            client.stop_torrent(raw_hash)
+            client.recheck_torrent(raw_hash)
+            client.reannounce_torrent(raw_hash)
+
+            self.assertEqual(
+                client.c.calls,
+                [
+                    ("start", expected_hash),
+                    ("stop", expected_hash),
+                    ("verify", expected_hash),
+                    ("reannounce", expected_hash),
+                ],
+            )
 
     def test_local_remove_torrents_normalizes_raw_hash_and_delete_flag(self):
         raw_hash = b"\x01" * 20

@@ -24,6 +24,7 @@ from updater import (
     download_and_apply_update,
     extract_zip,
     launch_update_helper,
+    find_update_helper,
     get_allowed_thumbprints,
     verify_authenticode,
     APP_VERSION
@@ -457,10 +458,56 @@ def test_verify_authenticode_runs_powershell_hidden(monkeypatch):
     verify_authenticode("SerrebiTorrent.exe", (SIGNING_THUMBPRINT,))
 
     _args, kwargs = run.call_args
+    assert "Get-AuthenticodeSignature -LiteralPath" in _args[0][-1]
+    assert "Get-AuthenticodeSignature -FilePath" not in _args[0][-1]
     assert kwargs["creationflags"] == 0x08000000
     assert kwargs["startupinfo"] is startup
     assert startup.dwFlags & 1
     assert startup.wShowWindow == 0
+
+
+def test_find_update_helper_checks_pyinstaller_internal_dir(tmp_path):
+    install = tmp_path / "SerrebiTorrent"
+    internal = install / "_internal"
+    internal.mkdir(parents=True)
+    helper = internal / "update_helper.bat"
+    helper.write_text("@echo off\n", encoding="utf-8")
+
+    assert find_update_helper(str(install)) == str(helper)
+
+
+def test_cleanup_update_artifacts_respects_backup_retention_and_grace(monkeypatch, tmp_path):
+    install = tmp_path / "SerrebiTorrent"
+    install.mkdir()
+    old_backup = tmp_path / "SerrebiTorrent_backup_20260101000000"
+    kept_backup = tmp_path / "SerrebiTorrent_backup_20260102000000"
+    grace_backup = tmp_path / "SerrebiTorrent_backup_20260103000000"
+    for path in (old_backup, kept_backup, grace_backup):
+        path.mkdir()
+    os.utime(old_backup, (1000, 1000))
+    os.utime(kept_backup, (2800, 2800))
+    os.utime(grace_backup, (2900, 2900))
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setenv("SERREBITORRENT_KEEP_BACKUPS", "1")
+
+    updater.cleanup_update_artifacts(str(install), now=3000)
+
+    assert not old_backup.exists()
+    assert kept_backup.exists()
+    assert grace_backup.exists()
+
+
+def test_cleanup_update_artifacts_removes_all_backups_when_keep_zero(monkeypatch, tmp_path):
+    install = tmp_path / "SerrebiTorrent"
+    install.mkdir()
+    backup = tmp_path / "SerrebiTorrent_backup_20260101000000"
+    backup.mkdir()
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setenv("SERREBITORRENT_KEEP_BACKUPS", "0")
+
+    updater.cleanup_update_artifacts(str(install), now=3000)
+
+    assert not backup.exists()
 
 
 def test_download_and_apply_update_launches_helper_from_temp(monkeypatch, tmp_path):
@@ -506,6 +553,47 @@ def test_download_and_apply_update_launches_helper_from_temp(monkeypatch, tmp_pa
     assert launched["staging"] == str(new_dir)
     assert launched["temp_root"] == str(temp_root)
     assert launched["helper"] == str(temp_root / "update_helper.bat")
+
+
+def test_download_and_apply_update_can_use_internal_update_helper(monkeypatch, tmp_path):
+    install = tmp_path / "SerrebiTorrent"
+    (install / "_internal").mkdir(parents=True)
+    (install / "_internal" / "update_helper.bat").write_text("old-helper\n", encoding="utf-8")
+    temp_root = tmp_path / "_SerrebiTorrent_update_tmp" / "SerrebiTorrent_update_1"
+    extract = temp_root / "extract"
+    new_dir = extract / "SerrebiTorrent"
+    (new_dir / "_internal").mkdir(parents=True)
+    (new_dir / updater.APP_EXE_NAME).write_text("exe", encoding="utf-8")
+    (new_dir / "_internal" / "update_helper.bat").write_text("new-helper\n", encoding="utf-8")
+    info = UpdateInfo(
+        current_version="1.0.0",
+        latest_version="2.0.0",
+        manifest={
+            "asset_filename": "app.zip",
+            "download_url": ASSET_URL,
+            "sha256": "abc",
+            "signing_thumbprint": SIGNING_THUMBPRINT,
+        },
+        release={},
+    )
+
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updater, "_make_update_temp_root", lambda _: str(temp_root))
+    monkeypatch.setattr(updater, "download_file", lambda url, dest, progress_cb=None: Path(dest).write_bytes(b"zip"))
+    monkeypatch.setattr(updater, "compute_sha256", lambda path: "abc")
+    monkeypatch.setattr(updater, "extract_zip", lambda zip_path, dest_dir: None)
+    monkeypatch.setattr(updater, "verify_authenticode", lambda exe, thumbs: None)
+    launched = {}
+    monkeypatch.setattr(
+        updater,
+        "launch_update_helper",
+        lambda helper, pid, inst, staging, temp_root=None: launched.update({"helper": helper}) or (True, ""),
+    )
+
+    ok, msg = download_and_apply_update(info, str(install))
+
+    assert ok, msg
+    assert Path(launched["helper"]).read_text(encoding="utf-8") == "new-helper\n"
 
 
 def test_download_and_apply_update_reports_progress(monkeypatch, tmp_path):

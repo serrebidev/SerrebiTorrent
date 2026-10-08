@@ -2,6 +2,10 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.31.0 - 2026-10-08
+
+- Enforce disk-space reserve during active downloads (#401).
+
 ## v1.30.0 - 2026-10-08
 
 - Pause seeding at a configurable ratio target (#400).

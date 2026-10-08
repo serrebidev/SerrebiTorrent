@@ -189,6 +189,8 @@ Local Session Settings includes **Pause seeding when ratio reaches**. Set a deci
 
 Local Session Settings includes **Minimum free space reserve (MiB, 0 disables protection)**. The default is 0, so existing behavior does not change until the user enables it. For .torrent files, SerrebiTorrent calculates the bytes actually selected for download before adding the torrent and refuses the add when it would cross the configured free-space reserve.
 
+The same reserve is enforced continuously while downloads are active. Once a torrent has metadata and a known save path, SerrebiTorrent checks free space in the background during normal refreshes. If a destination reaches the configured reserve, active incomplete torrents writing there are paused automatically, the event is announced to screen readers, and it is recorded in Activity History. Free space is queried once per destination per guard pass, and transient query failures are skipped rather than interrupting normal refreshes.
+
 The check supports the built-in libtorrent client and arbitrary Transmission download paths. qBittorrent exposes free space for its default save path, so protection is available there when that path is used. rTorrent does not expose a reliable cross-client free-space query and reports the limitation instead. Magnet links are not preflighted because their payload size is unknown until metadata arrives.
 
 ## Safe stalled-torrent recovery

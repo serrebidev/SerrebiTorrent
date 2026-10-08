@@ -33,6 +33,7 @@ from runtime_actions_i18n import register_associations
 from torrent_list import TorrentListCtrl as LocalizedTorrentListCtrl
 from torrent_diagnostics import diagnose_torrent
 from torrent_parsing import torrent_required_bytes
+from disk_space_guard import active_download_groups
 from torrent_categories import TorrentCategoryStore
 
 # The legacy handlers resolve AddTorrentDialog from main.py at call time. Point
@@ -164,6 +165,7 @@ class LocalizedMainFrame(legacy.MainFrame):
         self.torrent_categories = TorrentCategoryStore()
         self.category_items = {}
         self._ratio_pause_pending = set()
+        self._disk_space_guard_busy = False
         self._name_filter_query = ""
         super().__init__()
         self.categories_root = self.sidebar.AppendItem(
@@ -1586,6 +1588,124 @@ class LocalizedMainFrame(legacy.MainFrame):
             )
         wx.CallAfter(self.refresh_data)
 
+    def _schedule_disk_space_guard(
+        self,
+        client,
+        generation,
+        torrents,
+        reserve_mib,
+    ):
+        if (
+            self._disk_space_guard_busy
+            or reserve_mib <= 0
+            or not client
+            or not getattr(client, "supports_free_space_query", False)
+        ):
+            return
+
+        groups = active_download_groups(torrents)
+        if not groups:
+            return
+
+        self._disk_space_guard_busy = True
+        try:
+            self.thread_pool.submit(
+                self._disk_space_guard_background,
+                client,
+                generation,
+                groups,
+                reserve_mib,
+            )
+        except RuntimeError:
+            self._disk_space_guard_busy = False
+
+    def _disk_space_guard_background(
+        self,
+        client,
+        generation,
+        groups,
+        reserve_mib,
+    ):
+        paused = []
+        failures = []
+        reserve_bytes = int(reserve_mib) * 1024 * 1024
+
+        try:
+            for save_path, events in groups.items():
+                if generation != self.client_generation or self._closing:
+                    return
+                try:
+                    free_bytes = int(client.get_free_space(save_path))
+                except NotImplementedError:
+                    continue
+                except Exception:
+                    # A transient free-space query failure must not disrupt
+                    # normal refreshes or spam the user every two seconds.
+                    continue
+
+                if free_bytes > reserve_bytes:
+                    continue
+
+                for event in events:
+                    if generation != self.client_generation or self._closing:
+                        return
+                    try:
+                        client.stop_torrent(event["hash"])
+                        paused.append(event)
+                    except Exception as exc:  # noqa: BLE001 - client boundary
+                        failures.append((event["name"], exc))
+        finally:
+            wx.CallAfter(
+                self._on_disk_space_guard_done,
+                generation,
+                paused,
+                failures,
+            )
+
+    def _on_disk_space_guard_done(self, generation, paused, failures):
+        self._disk_space_guard_busy = False
+        if (
+            self._closing
+            or generation != self.client_generation
+            or not self.connected
+        ):
+            return
+        if not paused and not failures:
+            return
+
+        if failures:
+            message = self._(
+                "Disk-space reserve reached; paused {paused} download(s), "
+                "{failed} pause(s) failed. Last error: {error}"
+            ).format(
+                paused=len(paused),
+                failed=len(failures),
+                error=failures[-1][1],
+            )
+            kind = "error"
+        else:
+            message = self._(
+                "Disk-space reserve reached; paused {count} active download(s)."
+            ).format(count=len(paused))
+            kind = "success"
+
+        self.statusbar.SetStatusText(message, 0)
+        original_name = self.statusbar.GetName()
+        self.statusbar.SetName(message)
+        legacy.notify_win_event(
+            0x800C,
+            self.statusbar.GetHandle(),
+            legacy.OBJID_CLIENT,
+            0,
+        )
+        wx.CallLater(
+            1500,
+            self._restore_statusbar_accessible_name,
+            message,
+            original_name,
+        )
+        self._record_activity(message, kind=kind)
+
     def _ratio_target_events(self, torrents, target):
         events = []
         threshold = float(target) * 1000.0
@@ -1703,6 +1823,19 @@ class LocalizedMainFrame(legacy.MainFrame):
                 kind="success",
             )
         preferences = self.config_manager.get_preferences()
+        try:
+            disk_reserve_mib = max(
+                0,
+                int(preferences.get("disk_space_reserve_mib", 0) or 0),
+            )
+        except (TypeError, ValueError):
+            disk_reserve_mib = 0
+        self._schedule_disk_space_guard(
+            self.client,
+            generation,
+            torrents,
+            disk_reserve_mib,
+        )
         if completed and preferences.get("announce_download_complete", True):
             self._announce_download_completion(completed)
         if completed and preferences.get("show_download_complete_notification", False):

@@ -216,6 +216,8 @@ _PT_BR_MAIN = {
     "Disk-space protection is enabled, but this client cannot report free space.": "A proteção de espaço em disco está ativada, mas este cliente não informa o espaço livre.",
     "Disk-space protection is enabled, but the destination path is unavailable.": "A proteção de espaço em disco está ativada, mas a pasta de destino não está disponível.",
     "Disk-space protection could not determine the torrent size.": "A proteção de espaço em disco não conseguiu determinar o tamanho do torrent.",
+    "Disk-space reserve reached; paused {count} active download(s).": "Reserva de espaço em disco atingida; {count} download(s) ativo(s) pausado(s).",
+    "Disk-space reserve reached; paused {paused} download(s), {failed} pause(s) failed. Last error: {error}": "Reserva de espaço em disco atingida; {paused} download(s) pausado(s), com falha ao pausar {failed}. Último erro: {error}",
     "Not enough free disk space: {required} MiB required, {free} MiB free, {reserve} MiB reserved.": "Espaço em disco insuficiente: {required} MiB necessários, {free} MiB livres e {reserve} MiB reservados.",
     "Torrent was not added: {error}": "O torrent não foi adicionado: {error}",
     "Queue reordering is not supported by this client.": "Este cliente não oferece suporte à reordenação da fila.",

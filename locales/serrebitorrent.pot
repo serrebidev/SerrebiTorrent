@@ -628,6 +628,12 @@ msgstr ""
 msgid "Disk-space protection is enabled, but this client cannot report free space."
 msgstr ""
 
+msgid "Disk-space reserve reached; paused {count} active download(s)."
+msgstr ""
+
+msgid "Disk-space reserve reached; paused {paused} download(s), {failed} pause(s) failed. Last error: {error}"
+msgstr ""
+
 msgid "Do not download"
 msgstr ""
 

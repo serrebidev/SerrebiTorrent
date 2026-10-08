@@ -294,3 +294,18 @@ def test_seed_ratio_target_pause_runs_in_background():
     assert "client.stop_torrent(torrent_hash)" in source
     assert "self.thread_pool.submit(" in source
     assert "self._record_activity" in source
+
+
+def test_disk_space_guard_pauses_active_downloads_in_background():
+    source = Path("app_entry.py").read_text(encoding="utf-8")
+
+    assert "from disk_space_guard import active_download_groups" in source
+    assert "self._disk_space_guard_busy = False" in source
+    assert "def _schedule_disk_space_guard(" in source
+    assert "def _disk_space_guard_background(" in source
+    assert "active_download_groups(torrents)" in source
+    assert "client.get_free_space(save_path)" in source
+    assert 'client.stop_torrent(event["hash"])' in source
+    assert "self.thread_pool.submit(" in source
+    assert "legacy.notify_win_event(" in source
+    assert '"disk_space_reserve_mib", 0' in source

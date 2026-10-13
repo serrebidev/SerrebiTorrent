@@ -22,7 +22,7 @@ install_external_catalogs()
 
 import main as legacy
 import watch_folder
-from activity_history import (ActivityHistory, filter_activity_entries, format_activity_entry, render_activity_export)
+from activity_history import ActivityHistory, filter_activity_entries, format_activity_entry, render_activity_export
 from completion_notifications import CompletionTracker
 from add_torrent_dialog import AddTorrentDialog as LocalizedAddTorrentDialog
 from connection_dialog import ConnectDialog

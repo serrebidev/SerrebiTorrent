@@ -270,3 +270,52 @@ def test_tracker_merge_failure_reports_error(frame):
     frame.client.add_trackers.side_effect = RuntimeError('offline')
     frame._merge_magnet_trackers(frame.client, 1, HASH, ['https://new.example'])
     frame._on_action_error.assert_called_once_with('offline')
+
+
+def test_torrent_file_duplicate_uses_same_tracker_prompt_data(transmission, monkeypatch):
+    monkeypatch.setattr(clients, "torrent_file_magnet", lambda data: MAGNET)
+    transmission.c.get_torrents.return_value = [{
+        "hashString": HASH,
+        "name": "Existing",
+        "trackers": [{"announce": "https://old.example/announce"}],
+    }]
+    before_add = Mock()
+
+    magnet, duplicate = transmission.add_torrent_file_if_new(
+        b"torrent",
+        "/remote/chosen",
+        [1, 0, 1],
+        before_add=before_add,
+    )
+
+    assert magnet == MAGNET
+    assert duplicate == (
+        HASH,
+        "Existing",
+        ["https://old.example/announce"],
+    )
+    before_add.assert_not_called()
+    transmission.c.add_torrent.assert_not_called()
+
+
+def test_new_torrent_file_runs_preflight_and_adds_once(transmission, monkeypatch):
+    monkeypatch.setattr(clients, "torrent_file_magnet", lambda data: MAGNET)
+    transmission.c.get_torrents.return_value = []
+    before_add = Mock()
+
+    magnet, duplicate = transmission.add_torrent_file_if_new(
+        b"torrent",
+        "/remote/chosen",
+        [1, 0, 1],
+        before_add=before_add,
+    )
+
+    assert magnet == MAGNET
+    assert duplicate is None
+    before_add.assert_called_once_with()
+    transmission.c.add_torrent.assert_called_once_with(
+        b"torrent",
+        download_dir="/remote/chosen",
+        files_wanted=[0, 2],
+        files_unwanted=[1],
+    )

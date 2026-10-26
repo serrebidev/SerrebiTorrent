@@ -100,13 +100,16 @@ The default destination is read from the connected client. For a remote client,
 enter a path on that server (the Browse button browses this computer). New magnets
 obey the app's Automatically start torrents setting.
 
-For Transmission, qBittorrent, rTorrent and the built-in local session, if the torrent already exists,
-the app asks whether to add the new trackers from that magnet instead. Declining
-leaves it unchanged; accepting adds only missing trackers and preserves its
-location and running/paused state. Links without new trackers show an
-already-added message. Duplicate tracker merging currently applies to desktop
-magnet additions, not `.torrent` files or RSS/web additions. Locally merged
-trackers are persisted across application restarts.
+For Transmission, qBittorrent, rTorrent and the built-in local session, desktop
+magnet and `.torrent` additions are checked by info hash before they are submitted
+to the client. If the torrent already exists, SerrebiTorrent does not add a second
+copy. Instead, it compares trackers and asks whether to add only the new ones.
+Declining leaves the torrent unchanged; accepting preserves its location and
+running/paused state. Inputs without new trackers show an already-added message.
+The duplicate check is repeated atomically at submission time so a torrent added
+while the save dialog was open is still caught. RSS/web additions remain outside
+this desktop duplicate-tracker merge flow. Locally merged trackers are persisted
+across application restarts.
 
 Transmission file additions also preserve the checked/unchecked file selection
 from the Add Torrent dialog. Transmission progress uses the selected download

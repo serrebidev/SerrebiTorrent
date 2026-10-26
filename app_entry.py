@@ -1506,6 +1506,23 @@ class LocalizedMainFrame(legacy.MainFrame):
                 )
             )
 
+    def _prompt_duplicate_torrent_file(
+        self,
+        client,
+        generation,
+        magnet,
+        duplicate,
+        original_hash,
+    ):
+        if original_hash:
+            self.pending_hash_starts.discard(original_hash)
+        self._prompt_duplicate_magnet(
+            client,
+            generation,
+            magnet,
+            duplicate,
+        )
+
     def _add_torrent_file_background(
         self,
         client,
@@ -1534,11 +1551,12 @@ class LocalizedMainFrame(legacy.MainFrame):
             )
             if duplicate:
                 wx.CallAfter(
-                    self._prompt_duplicate_magnet,
+                    self._prompt_duplicate_torrent_file,
                     client,
                     generation,
                     magnet,
                     duplicate,
+                    self._maybe_hash_from_torrent_bytes(data),
                 )
                 return
 

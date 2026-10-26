@@ -179,15 +179,16 @@ def test_torrents_info_endpoint(auth_client):
 
 def test_torrents_add_endpoint(auth_client):
     mock_client = MagicMock()
+    mock_client.add_magnet.return_value = None
     web_server.WEB_CONFIG['client'] = mock_client
-    
+
     rv = auth_client.post(
         '/api/v2/torrents/add',
         data={'urls': 'magnet:?foo', 'savepath': '/tmp'},
         headers=csrf_headers(auth_client),
     )
     assert rv.status_code == 200
-    mock_client.add_torrent_url.assert_called_with('magnet:?foo', sp='/tmp')
+    mock_client.add_magnet.assert_called_with('magnet:?foo', '/tmp', True)
 
 def test_torrents_delete_endpoint_uses_bulk_remove(auth_client):
     mock_client = MagicMock()

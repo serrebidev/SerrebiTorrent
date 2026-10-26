@@ -106,8 +106,8 @@ to the client. If the torrent already exists, SerrebiTorrent does not add a seco
 copy. Instead, it compares trackers and asks whether to add only the new ones.
 Declining leaves the torrent unchanged; accepting preserves its location and
 running/paused state. Inputs without new trackers show an already-added message.
-The duplicate check is repeated atomically at submission time so a torrent added
-while the save dialog was open is still caught. RSS/web additions remain outside
+The submission-time duplicate check is serialized within the process, so a torrent
+added while the save dialog was open is still caught. RSS/web additions remain outside
 this desktop duplicate-tracker merge flow. Locally merged trackers are persisted
 across application restarts.
 

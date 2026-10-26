@@ -188,7 +188,7 @@ def test_torrents_add_endpoint(auth_client):
         headers=csrf_headers(auth_client),
     )
     assert rv.status_code == 200
-    mock_client.add_magnet.assert_called_with('magnet:?foo', '/tmp', True)
+    mock_client.add_magnet.assert_called_with('magnet:?foo', '/tmp')
 
 def test_torrents_delete_endpoint_uses_bulk_remove(auth_client):
     mock_client = MagicMock()

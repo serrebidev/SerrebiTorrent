@@ -13,7 +13,13 @@ from urllib.parse import quote, urljoin, urlparse, urlunparse
 
 import requests
 import urllib3
-from torrent_parsing import build_magnet_from_hashes, torrent_file_storage, parse_magnet_infohash, clean_tracker_urls
+from torrent_parsing import (
+    build_magnet_from_hashes,
+    clean_tracker_urls,
+    parse_magnet_infohash,
+    torrent_file_magnet,
+    torrent_file_storage,
+)
 
 MAX_TORRENT_DOWNLOAD_BYTES = 64 * 1024 * 1024
 MAX_TORRENT_URL_REDIRECTS = 5
@@ -322,6 +328,7 @@ class BaseClient(abc.ABC):
     supports_torrent_rate_limits = False
     supports_free_space_query = False
     _magnet_add_lock = threading.RLock()
+    _torrent_file_add_lock = threading.RLock()
 
     def add_magnet(self, url, save_path, start):
         with self._magnet_add_lock:
@@ -333,6 +340,18 @@ class BaseClient(abc.ABC):
 
     def _add_new_magnet(self, url, save_path, start):
         self.add_torrent_url(url, save_path)
+
+    def add_torrent_file_if_new(self, data, save_path=None, priorities=None, before_add=None):
+        """Avoid duplicate torrent-file adds within this process."""
+        magnet = torrent_file_magnet(data)
+        with self._torrent_file_add_lock:
+            duplicate = self.find_magnet_duplicate(magnet) if magnet else None
+            if duplicate:
+                return magnet, duplicate
+            if before_add is not None:
+                before_add()
+            self.add_torrent_file(data, save_path, priorities)
+        return magnet, None
 
     def add_trackers(self, info_hash, trackers):
         raise NotImplementedError

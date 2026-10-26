@@ -328,3 +328,17 @@ def test_category_management_menu_is_accessible_and_updates_filters():
     assert "wx.YES_NO | wx.NO_DEFAULT" in dialog
     assert "self.store.rename_category(" in dialog
     assert "self.store.delete_category(" in dialog
+
+
+def test_torrent_file_duplicate_detection_reuses_magnet_prompt():
+    source = Path("app_entry.py").read_text(encoding="utf-8")
+
+    assert "client.add_torrent_file_if_new(" in source
+    assert "before_add=lambda: self._check_disk_space_before_add(" in source
+    assert "self._prompt_duplicate_magnet" in source
+    assert "wx.CallAfter(" in source
+
+    duplicate_check = source.index("client.add_torrent_file_if_new(")
+    prompt = source.index("self._prompt_duplicate_magnet", duplicate_check)
+    success = source.index("self._on_action_complete", duplicate_check)
+    assert duplicate_check < prompt < success

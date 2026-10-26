@@ -11,8 +11,20 @@ import os
 from pathlib import Path
 import threading
 import tempfile
+import time
 
 from app_paths import get_state_dir
+
+
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(path) -> threading.Lock:
+    """One lock per destination file, shared by every instance in-process."""
+    key = str(path)
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(key, threading.Lock())
 
 
 DEFAULT_MAX_ENTRIES = 500
@@ -115,13 +127,27 @@ class ActivityHistory:
             self._write_unlocked([])
 
     def _write_unlocked(self, entries: list[dict[str, str]]) -> None:
+        # Instances have separate locks; serialize writes to the same file
+        # across instances or Windows rejects a concurrent os.replace
+        # with PermissionError (WinError 5).
+        with _path_lock(self.path):
+            self._write_serialized(entries)
+
+    def _write_serialized(self, entries: list[dict[str, str]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(prefix=f"{self.path.name}.", suffix=".tmp", dir=self.path.parent)
         temp = Path(name)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as output:
                 output.write(json.dumps(entries, ensure_ascii=False, indent=2))
-            os.replace(temp, self.path)
+            for attempt in range(10):
+                try:
+                    os.replace(temp, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.05)
             if os.name != "nt":
                 try:
                     os.chmod(self.path, 0o600)

@@ -219,3 +219,59 @@ def torrent_required_bytes(data: bytes, priorities=None) -> Optional[int]:
         return total
     except Exception:
         return None
+
+
+def torrent_file_magnet(data: bytes) -> str:
+    """Build a magnet carrying a .torrent file's hashes, name, and trackers."""
+    if not lt:
+        return ""
+    try:
+        info = lt.torrent_info(data)
+        v1_hash = None
+        v2_hash = None
+
+        info_hashes = getattr(info, "info_hashes", None)
+        if callable(info_hashes):
+            hashes = info_hashes()
+            try:
+                if hashes.has_v1():
+                    v1_hash = str(hashes.v1)
+            except Exception:
+                pass
+            try:
+                if hashes.has_v2():
+                    v2_hash = str(hashes.v2)
+            except Exception:
+                pass
+        else:
+            try:
+                v1_hash = str(info.info_hash())
+            except Exception:
+                pass
+
+        try:
+            display_name = str(info.name())
+        except Exception:
+            display_name = None
+
+        trackers = []
+        try:
+            entries = info.trackers()
+        except Exception:
+            entries = []
+        for entry in entries or []:
+            if isinstance(entry, dict):
+                url = entry.get("url")
+            else:
+                url = getattr(entry, "url", None)
+            if url:
+                trackers.append(str(url))
+
+        return build_magnet_from_hashes(
+            v1_hash=v1_hash,
+            v2_hash=v2_hash,
+            display_name=display_name,
+            trackers=trackers,
+        )
+    except Exception:
+        return ""

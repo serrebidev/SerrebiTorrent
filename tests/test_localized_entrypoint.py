@@ -199,7 +199,8 @@ def test_disk_space_protection_runs_before_torrent_file_add():
     assert "client.get_free_space(target_path)" in source
     assert "def _add_torrent_file_background(" in source
     assert "self._check_disk_space_before_add(" in source
-    assert "super()._add_torrent_file_background(" in source
+    assert "client.add_torrent_file_if_new(" in source
+    assert "before_add=lambda: self._check_disk_space_before_add(" in source
 
 
 def test_activity_history_is_keyboard_accessible_and_records_user_events():

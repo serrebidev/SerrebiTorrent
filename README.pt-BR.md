@@ -21,7 +21,7 @@ Um gerenciador de torrents para Windows, desenvolvido com foco em uso por teclad
 
 ## Download e instalação
 
-Baixe a versão mais recente na [página de Releases](https://github.com/serrebidev/SerrebiTorrent/releases). Mais recente: **v1.12.0**.
+Baixe a versão mais recente na [página de Releases](https://github.com/serrebidev/SerrebiTorrent/releases).
 
 **Windows portátil**
 

@@ -335,10 +335,12 @@ def test_torrent_file_duplicate_detection_reuses_magnet_prompt():
 
     assert "client.add_torrent_file_if_new(" in source
     assert "before_add=lambda: self._check_disk_space_before_add(" in source
-    assert "self._prompt_duplicate_magnet" in source
+    assert "def _prompt_duplicate_torrent_file(" in source
+    assert "self._prompt_duplicate_magnet(" in source
+    assert "self.pending_hash_starts.discard(original_hash)" in source
     assert "wx.CallAfter(" in source
 
     duplicate_check = source.index("client.add_torrent_file_if_new(")
-    prompt = source.index("self._prompt_duplicate_magnet", duplicate_check)
+    prompt = source.index("self._prompt_duplicate_torrent_file", duplicate_check)
     success = source.index("self._on_action_complete", duplicate_check)
     assert duplicate_check < prompt < success

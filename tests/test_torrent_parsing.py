@@ -119,3 +119,63 @@ def test_torrent_required_bytes_respects_priorities(monkeypatch):
 
     assert torrent_parsing.torrent_required_bytes(b"torrent") == 600
     assert torrent_parsing.torrent_required_bytes(b"torrent", [1, 0, 1]) == 400
+
+
+def test_torrent_file_magnet_keeps_hashes_name_and_trackers(monkeypatch):
+    class Hashes:
+        v1 = "1" * 40
+        v2 = "2" * 64
+
+        def has_v1(self):
+            return True
+
+        def has_v2(self):
+            return True
+
+    class Tracker:
+        def __init__(self, url):
+            self.url = url
+
+    class Info:
+        def info_hashes(self):
+            return Hashes()
+
+        def name(self):
+            return "Hybrid torrent"
+
+        def trackers(self):
+            return [
+                Tracker("https://one.example/announce"),
+                Tracker("https://two.example/announce"),
+                Tracker("https://one.example/announce"),
+            ]
+
+    fake_lt = type(
+        "FakeLt",
+        (),
+        {"torrent_info": staticmethod(lambda data: Info())},
+    )()
+    monkeypatch.setattr(torrent_parsing, "lt", fake_lt)
+
+    magnet = torrent_parsing.torrent_file_magnet(b"torrent")
+    query = parse_qs(urlparse(magnet).query)
+
+    assert query["xt"] == [
+        "urn:btih:" + "1" * 40,
+        "urn:btmh:1220" + "2" * 64,
+    ]
+    assert query["dn"] == ["Hybrid torrent"]
+    assert query["tr"] == [
+        "https://one.example/announce",
+        "https://two.example/announce",
+    ]
+
+
+def test_torrent_file_magnet_invalid_bytes_is_empty(monkeypatch):
+    class FailingLt:
+        @staticmethod
+        def torrent_info(data):
+            raise RuntimeError("bad torrent")
+
+    monkeypatch.setattr(torrent_parsing, "lt", FailingLt())
+    assert torrent_parsing.torrent_file_magnet(b"bad") == ""

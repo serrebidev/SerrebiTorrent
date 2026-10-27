@@ -45,6 +45,14 @@ def test_rss_auto_add_validates_http_links_before_client_call():
     assert "Already added from RSS" in source
 
 
+def test_desktop_torrent_file_adds_use_duplicate_guard():
+    source = inspect.getsource(main.MainFrame._add_torrent_file_background)
+
+    assert "client.add_torrent_file_if_new(" in source
+    assert "self._prompt_duplicate_magnet" in source
+    assert "client.add_torrent_file(data, save_path, priorities)" not in source
+
+
 def test_column_sort_preserves_selection_by_hash():
     source = inspect.getsource(main.TorrentListCtrl.on_col_click)
 

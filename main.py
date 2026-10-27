@@ -3404,8 +3404,19 @@ class MainFrame(MagnetIntakeMixin, wx.Frame):
                 return
             if not client:
                 raise RuntimeError("No client connected.")
-            client.add_torrent_file(data, save_path, priorities)
+            magnet, duplicate = client.add_torrent_file_if_new(
+                data, save_path, priorities
+            )
             if generation != self.client_generation or self._closing:
+                return
+            if duplicate:
+                wx.CallAfter(
+                    self._prompt_duplicate_magnet,
+                    client,
+                    generation,
+                    magnet,
+                    duplicate,
+                )
                 return
             wx.CallAfter(self._on_action_complete, status_msg)
         except Exception as e:

@@ -2,6 +2,10 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.34.3 - 2026-10-27
+
+- Guard desktop torrent-file intake against duplicates (#415).
+
 ## v1.34.2 - 2026-10-27
 
 - Guard RSS magnet additions against duplicates (#414).

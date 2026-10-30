@@ -1256,6 +1256,60 @@ function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+
+const detailSortState = {
+    files: { key: null, ascending: true },
+    peers: { key: null, ascending: true },
+    trackers: { key: null, ascending: true },
+};
+
+function compareDetailValues(a, b) {
+    if (typeof a === 'string' || typeof b === 'string') {
+        return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+    }
+    return Number(a || 0) - Number(b || 0);
+}
+
+function applyDetailSort(kind, rows, valueFor) {
+    const state = detailSortState[kind];
+    const getter = state && valueFor[state.key];
+    if (!getter) return rows;
+    const direction = state.ascending ? 1 : -1;
+    return [...rows].sort((a, b) => compareDetailValues(getter(a), getter(b)) * direction);
+}
+
+function buildDetailHeader(kind, columns, rerender) {
+    const translate = window.SerrebiI18n?.t || ((value) => value);
+    const state = detailSortState[kind];
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    for (const { key, label } of columns) {
+        const th = document.createElement('th');
+        th.scope = 'col';
+        const active = state.key === key;
+        th.setAttribute('aria-sort', active ? (state.ascending ? 'ascending' : 'descending') : 'none');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'detail-sort-header btn btn-link p-0 text-reset text-decoration-none fw-bold';
+        button.dataset.detailSortKind = kind;
+        button.dataset.detailSortKey = key;
+        button.textContent = translate(label);
+        button.addEventListener('click', () => {
+            if (state.key === key) state.ascending = !state.ascending;
+            else {
+                state.key = key;
+                state.ascending = true;
+            }
+            announceToSR(translate('Sorted by {label}.').replace('{label}', translate(label)));
+            rerender();
+        });
+        th.appendChild(button);
+        headerRow.appendChild(th);
+    }
+    thead.appendChild(headerRow);
+    return thead;
+}
+
 async function updateFilesDetails() {
     const pane = document.getElementById('details-files');
     if (!pane) return;
@@ -1309,19 +1363,21 @@ async function updateFilesDetails() {
         table.className = 'table table-sm';
         table.setAttribute('aria-label', translate('Torrent Files'));
 
-        const thead = document.createElement('thead');
-        const headerRow = document.createElement('tr');
-        for (const label of ['Name', 'Size', 'Progress', 'Priority']) {
-            const th = document.createElement('th');
-            th.scope = 'col';
-            th.textContent = translate(label);
-            headerRow.appendChild(th);
-        }
-        thead.appendChild(headerRow);
-        table.appendChild(thead);
+        table.appendChild(buildDetailHeader('files', [
+            { key: 'name', label: 'Name' },
+            { key: 'size', label: 'Size' },
+            { key: 'progress', label: 'Progress' },
+            { key: 'priority', label: 'Priority' },
+        ], () => { void updateFilesDetails(); }));
 
+        const fileValues = {
+            name: (file) => file?.name || '',
+            size: (file) => Number(file?.size) || 0,
+            progress: (file) => Number(file?.progress) || 0,
+            priority: (file) => Number(file?.priority) || 0,
+        };
         const tbody = document.createElement('tbody');
-        for (const file of files) {
+        for (const file of applyDetailSort('files', files, fileValues)) {
             const row = document.createElement('tr');
             const priorityLabels = [
                 translate('Do not download'),
@@ -1409,19 +1465,23 @@ async function updatePeersDetails() {
         table.className = 'table table-sm';
         table.setAttribute('aria-label', translate('Torrent Peers'));
 
-        const thead = document.createElement('thead');
-        const headerRow = document.createElement('tr');
-        for (const label of ['Address', 'Client', 'Progress', 'Down Speed', 'Up Speed']) {
-            const th = document.createElement('th');
-            th.scope = 'col';
-            th.textContent = translate(label);
-            headerRow.appendChild(th);
-        }
-        thead.appendChild(headerRow);
-        table.appendChild(thead);
+        table.appendChild(buildDetailHeader('peers', [
+            { key: 'address', label: 'Address' },
+            { key: 'client', label: 'Client' },
+            { key: 'progress', label: 'Progress' },
+            { key: 'down_rate', label: 'Down Speed' },
+            { key: 'up_rate', label: 'Up Speed' },
+        ], () => { void updatePeersDetails(); }));
 
+        const peerValues = {
+            address: (peer) => peer?.address || '',
+            client: (peer) => peer?.client || '',
+            progress: (peer) => Number(peer?.progress) || 0,
+            down_rate: (peer) => Number(peer?.down_rate) || 0,
+            up_rate: (peer) => Number(peer?.up_rate) || 0,
+        };
         const tbody = document.createElement('tbody');
-        for (const peer of peers) {
+        for (const peer of applyDetailSort('peers', peers, peerValues)) {
             const row = document.createElement('tr');
             const progress = Math.round(
                 Math.max(0, Math.min(1, Number(peer?.progress) || 0)) * 100
@@ -1508,19 +1568,21 @@ async function updateTrackersDetails() {
         table.className = 'table table-sm';
         table.setAttribute('aria-label', translate('Torrent Trackers'));
 
-        const thead = document.createElement('thead');
-        const headerRow = document.createElement('tr');
-        for (const label of ['Tracker URL', 'Status', 'Peers', 'Message']) {
-            const th = document.createElement('th');
-            th.scope = 'col';
-            th.textContent = translate(label);
-            headerRow.appendChild(th);
-        }
-        thead.appendChild(headerRow);
-        table.appendChild(thead);
+        table.appendChild(buildDetailHeader('trackers', [
+            { key: 'url', label: 'Tracker URL' },
+            { key: 'status', label: 'Status' },
+            { key: 'peers', label: 'Peers' },
+            { key: 'message', label: 'Message' },
+        ], () => { void updateTrackersDetails(); }));
 
+        const trackerValues = {
+            url: (tracker) => tracker?.url || '',
+            status: (tracker) => tracker?.status || '',
+            peers: (tracker) => Number(tracker?.peers) || 0,
+            message: (tracker) => tracker?.message || '',
+        };
         const tbody = document.createElement('tbody');
-        for (const tracker of trackers) {
+        for (const tracker of applyDetailSort('trackers', trackers, trackerValues)) {
             const row = document.createElement('tr');
             const values = [
                 tracker?.url || '',

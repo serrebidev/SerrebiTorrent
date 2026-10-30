@@ -2024,7 +2024,95 @@ class RemotePreferencesDialog(wx.Dialog):
 
         return prefs
 
-class FilesListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
+
+class DetailColumnSortMixin:
+    """Click a column header to sort a detail list, like the torrent list.
+
+    Clicking the active column again reverses the direction. The chosen
+    sort is re-applied on every ``set_data`` refresh, and focus/selection
+    are preserved by row identity so a re-sort (or the periodic refresh)
+    does not lose the row a screen-reader user is sitting on.
+    """
+
+    SORT_KEYS = ()
+
+    def init_column_sort(self):
+        self.sort_col = -1
+        self.sort_asc = True
+        self.Bind(wx.EVT_LIST_COL_CLICK, self.on_col_click)
+
+    def _row_identity(self, row):
+        raise NotImplementedError
+
+    def _focused_identity(self):
+        idx = self.GetFocusedItem()
+        if 0 <= idx < len(self.data):
+            return self._row_identity(self.data[idx])
+        return None
+
+    def _index_of_identity(self, identity):
+        if identity is None:
+            return None
+        for idx, row in enumerate(self.data):
+            if self._row_identity(row) == identity:
+                return idx
+        return None
+
+    def _selected_identities(self):
+        identities = []
+        item = self.GetFirstSelected()
+        while item != -1:
+            if 0 <= item < len(self.data):
+                identities.append(self._row_identity(self.data[item]))
+            item = self.GetNextSelected(item)
+        return identities
+
+    def on_col_click(self, event):
+        selected = set(self._selected_identities())
+        focused = self._focused_identity()
+        col = event.GetColumn()
+        if col == getattr(self, "sort_col", -1):
+            self.sort_asc = not self.sort_asc
+        else:
+            self.sort_col = col
+            self.sort_asc = True
+        self._apply_sort()
+        self.Refresh()
+        if selected:
+            for idx, row in enumerate(self.data):
+                try:
+                    self.Select(idx, self._row_identity(row) in selected)
+                except Exception:
+                    pass
+        self._restore_focus_row(len(self.data), self._index_of_identity(focused))
+
+    def _apply_sort(self):
+        col = getattr(self, "sort_col", -1)
+        if col == -1 or col >= len(self.SORT_KEYS):
+            return
+        data = getattr(self, "data", None)
+        if not data:
+            return
+        field = self.SORT_KEYS[col]
+
+        def sort_key(row):
+            val = row.get(field)
+            if val is None:
+                return (1, "")
+            if isinstance(val, str):
+                return (0, val.casefold())
+            return (0, val)
+
+        try:
+            data.sort(key=sort_key, reverse=not getattr(self, "sort_asc", True))
+        except TypeError:
+            data.sort(
+                key=lambda row: str(sort_key(row)),
+                reverse=not getattr(self, "sort_asc", True),
+            )
+
+
+class FilesListCtrl(DetailColumnSortMixin, AccessibleVirtualListMixin, wx.ListCtrl):
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "Name", width=400)
@@ -2034,10 +2122,17 @@ class FilesListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.data = []
         self.SetName("Files")
         self.init_accessible_virtual_list(pulse_navigation=True)
+        self.init_column_sort()
+
+    SORT_KEYS = ("name", "size", "progress", "priority")
+
+    def _row_identity(self, row):
+        return (row.get('index'), row.get('name'))
 
     def set_data(self, data):
         focused_key = self._focused_file_key()
         self.data = data
+        self._apply_sort()
         self.set_virtual_item_count(len(data), self._index_of_file_key(focused_key))
 
     def _focused_file_key(self):
@@ -2081,7 +2176,7 @@ class FilesListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
             return str(p)
         return ""
 
-class PeersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
+class PeersListCtrl(DetailColumnSortMixin, AccessibleVirtualListMixin, wx.ListCtrl):
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "IP", width=150)
@@ -2092,10 +2187,18 @@ class PeersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.data = []
         self.SetName("Peers")
         self.init_accessible_virtual_list(pulse_navigation=True)
+        self.init_column_sort()
+
+    SORT_KEYS = ("address", "client", "progress", "down_rate", "up_rate")
+
+    def _row_identity(self, row):
+        return (row.get('address'), row.get('client'))
 
     def set_data(self, data):
+        focused = self._focused_identity()
         self.data = data
-        self.set_virtual_item_count(len(data))
+        self._apply_sort()
+        self.set_virtual_item_count(len(data), self._index_of_identity(focused))
 
     def OnGetItemText(self, item, col):
         if item >= len(self.data):
@@ -2122,7 +2225,7 @@ class PeersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
             rate /= 1024
         return f"{rate:.1f} TB/s"
 
-class TrackersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
+class TrackersListCtrl(DetailColumnSortMixin, AccessibleVirtualListMixin, wx.ListCtrl):
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "URL", width=300)
@@ -2132,10 +2235,18 @@ class TrackersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.data = []
         self.SetName("Trackers")
         self.init_accessible_virtual_list(pulse_navigation=True)
+        self.init_column_sort()
+
+    SORT_KEYS = ("url", "status", "peers", "message")
+
+    def _row_identity(self, row):
+        return (row.get('url'),)
 
     def set_data(self, data):
+        focused = self._focused_identity()
         self.data = data
-        self.set_virtual_item_count(len(data))
+        self._apply_sort()
+        self.set_virtual_item_count(len(data), self._index_of_identity(focused))
 
     def OnGetItemText(self, item, col):
         if item >= len(self.data):

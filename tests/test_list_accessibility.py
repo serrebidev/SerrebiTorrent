@@ -72,6 +72,7 @@ class FakeVirtualList(main.AccessibleVirtualListMixin):
 class FakeFilesList(FakeVirtualList):
     _focused_file_key = main.FilesListCtrl._focused_file_key
     _index_of_file_key = main.FilesListCtrl._index_of_file_key
+    _apply_sort = main.DetailColumnSortMixin._apply_sort
     set_data = main.FilesListCtrl.set_data
 
     def __init__(self, data, focused=-1, item_count=0, has_focus=False):

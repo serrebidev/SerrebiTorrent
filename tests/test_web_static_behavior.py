@@ -375,6 +375,21 @@ def test_web_torrent_table_supports_accessible_sorting():
     assert "Sorted by {label}." in app
 
 
+def test_web_detail_tables_support_click_header_sorting():
+    app = Path("web_static/app.js").read_text(encoding="utf-8")
+
+    assert "const detailSortState = {" in app
+    assert "function applyDetailSort(kind, rows, valueFor)" in app
+    assert "function buildDetailHeader(kind, columns, rerender)" in app
+    assert "button.dataset.detailSortKey = key;" in app
+    assert "'aria-sort'" in app
+    for kind in ("files", "peers", "trackers"):
+        assert f"buildDetailHeader('{kind}', [" in app
+        assert f"applyDetailSort('{kind}', {kind}, " in app
+    for key in ("down_rate", "up_rate", "priority"):
+        assert f"{key}: (" in app
+
+
 def test_web_actions_can_start_and_stop_all_loaded_torrents():
     index = Path("web_static/index.html").read_text(encoding="utf-8")
     app = Path("web_static/app.js").read_text(encoding="utf-8")

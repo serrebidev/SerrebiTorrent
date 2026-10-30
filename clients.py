@@ -1055,20 +1055,50 @@ class TransmissionClient(BaseClient):
     DEFAULT_RPC_PATH = "/transmission/rpc"
     DEFAULT_PORT = 9091
 
+    @classmethod
+    def _normalize_rpc_path(cls, path):
+        # Users often paste the address they open in a browser (web UI or
+        # bare host root). POSTing RPC there returns an HTML page, which the
+        # rpc library reports as "failed to parse response as json" (#416).
+        path = (path or "").rstrip("/")
+        if not path:
+            return cls.DEFAULT_RPC_PATH
+        if path.endswith("/transmission/web"):
+            return path[: -len("/web")] + "/rpc"
+        if path.endswith("/transmission"):
+            return path + "/rpc"
+        return path
+
     def __init__(self, u, us, pw):
         if not u.startswith(('http://', 'https://')):
             u = 'http://' + u
         p = urlparse(u)
         username = us if us not in (None, "") else p.username
         password = pw if pw not in (None, "") else p.password
-        self.c = TransClient(
-            host=p.hostname or "127.0.0.1",
-            port=p.port or self.DEFAULT_PORT,
-            username=username,
+        host = p.hostname or "127.0.0.1"
+        port = p.port or self.DEFAULT_PORT
+        rpc_path = self._normalize_rpc_path(p.path)
+        try:
+            self.c = TransClient(
+                host=host,
+                port=port,
+                username=username,
             password=password,
-            protocol=p.scheme,
-            path=p.path or self.DEFAULT_RPC_PATH,
-        )
+                protocol=p.scheme,
+                path=rpc_path,
+            )
+        except Exception as e:
+            if "failed to parse response as json" not in str(e):
+                raise
+            raw = " ".join(str(getattr(e, "raw_response", "") or "").split())[:120]
+            detail = f" Server replied: {raw}" if raw else ""
+            raise ConnectionError(
+                f"Transmission at {p.scheme}://{host}:{port}{rpc_path} did not "
+                "return RPC JSON. The address likely reaches the web UI or "
+                "another service instead of the Transmission RPC endpoint — "
+                "check the host, port, and that RPC is enabled on the server."
+                + detail
+            ) from e
 
     def test_connection(self): return self.c.server_version
 

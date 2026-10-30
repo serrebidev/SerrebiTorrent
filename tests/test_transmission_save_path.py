@@ -119,6 +119,45 @@ def test_transmission_url_defaults_port_and_preserves_custom_path():
     }]
 
 
+def test_transmission_url_normalizes_web_ui_and_root_addresses():
+    # Issue #416: pasting the browser (web UI) address, a bare host root, or
+    # a trailing-slash RPC address made RPC POSTs land on an HTML page and
+    # fail with "failed to parse response as json".
+    cases = [
+        ("http://nas.example", "/transmission/rpc"),
+        ("http://nas.example:9091/", "/transmission/rpc"),
+        ("http://nas.example:9091/transmission/web/", "/transmission/rpc"),
+        ("http://nas.example:9091/transmission/web", "/transmission/rpc"),
+        ("http://nas.example:9091/transmission", "/transmission/rpc"),
+        ("http://nas.example:9091/transmission/rpc/", "/transmission/rpc"),
+        ("http://nas.example:9091/proxy/transmission/web/", "/proxy/transmission/rpc"),
+    ]
+    for url, expected_path in cases:
+        RecordingTransClient.calls = []
+        with mock.patch.object(clients, "TransClient", RecordingTransClient):
+            clients.TransmissionClient(url, "user", "pass")
+        assert RecordingTransClient.calls[0]["path"] == expected_path, url
+
+
+def test_transmission_non_json_response_gets_actionable_error():
+    class HtmlTransClient:
+        def __init__(self, **kwargs):
+            error = ValueError("failed to parse response as json")
+            error.raw_response = "<html><title>Synology DSM</title></html>"
+            raise error
+
+    with mock.patch.object(clients, "TransClient", HtmlTransClient):
+        try:
+            clients.TransmissionClient("http://nas.example:5000/transmission/rpc", "user", "pass")
+        except ConnectionError as e:
+            message = str(e)
+        else:
+            raise AssertionError("expected ConnectionError")
+    assert "did not return RPC JSON" in message
+    assert "nas.example:5000/transmission/rpc" in message
+    assert "Synology DSM" in message
+
+
 def test_transmission_url_credentials_used_when_profile_fields_blank():
     RecordingTransClient.calls = []
     with mock.patch.object(clients, "TransClient", RecordingTransClient):

@@ -2,6 +2,12 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.34.4 - 2026-10-30
+
+- Update Homebrew before the macOS install.
+- Build macOS CI on Homebrew Python 3.15.
+- Normalize Transmission RPC path so web UI addresses connect (#417).
+
 ## v1.34.3 - 2026-10-27
 
 - Guard desktop torrent-file intake against duplicates (#415).

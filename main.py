@@ -2024,7 +2024,58 @@ class RemotePreferencesDialog(wx.Dialog):
 
         return prefs
 
-class FilesListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
+def _detail_text_key(value):
+    return str(value or "").lower()
+
+
+def _detail_num_key(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+class ColumnSortMixin:
+    """Header-click sorting for the virtual detail lists, mirroring the
+    torrent list: click a column header to sort by it, click it again to
+    reverse. The chosen order is re-applied by set_data, so live refreshes
+    keep it instead of snapping back."""
+
+    sort_key_funcs = ()
+
+    def init_column_sort(self):
+        self.sort_col = -1
+        self.sort_asc = True
+        self.Bind(wx.EVT_LIST_COL_CLICK, self.on_col_click)
+
+    def on_col_click(self, event):
+        col = event.GetColumn()
+        if col == self.sort_col:
+            self.sort_asc = not self.sort_asc
+        else:
+            self.sort_col = col
+            self.sort_asc = True
+        self.set_data(self.data)
+
+    def _apply_sort(self):
+        if not 0 <= self.sort_col < len(self.sort_key_funcs) or not self.data:
+            return
+        try:
+            self.data.sort(
+                key=self.sort_key_funcs[self.sort_col], reverse=not self.sort_asc
+            )
+        except Exception:
+            pass
+
+
+class FilesListCtrl(ColumnSortMixin, AccessibleVirtualListMixin, wx.ListCtrl):
+    sort_key_funcs = (
+        lambda row: _detail_text_key(os.path.basename(row.get("name") or "")),
+        lambda row: _detail_num_key(row.get("size")),
+        lambda row: _detail_num_key(row.get("progress")),
+        lambda row: _detail_num_key(row.get("priority")),
+    )
+
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "Name", width=400)
@@ -2034,10 +2085,12 @@ class FilesListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.data = []
         self.SetName("Files")
         self.init_accessible_virtual_list(pulse_navigation=True)
+        self.init_column_sort()
 
     def set_data(self, data):
         focused_key = self._focused_file_key()
         self.data = data
+        self._apply_sort()
         self.set_virtual_item_count(len(data), self._index_of_file_key(focused_key))
 
     def _focused_file_key(self):
@@ -2081,7 +2134,15 @@ class FilesListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
             return str(p)
         return ""
 
-class PeersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
+class PeersListCtrl(ColumnSortMixin, AccessibleVirtualListMixin, wx.ListCtrl):
+    sort_key_funcs = (
+        lambda row: _detail_text_key(row.get("address")),
+        lambda row: _detail_text_key(row.get("client")),
+        lambda row: _detail_num_key(row.get("progress")),
+        lambda row: _detail_num_key(row.get("down_rate")),
+        lambda row: _detail_num_key(row.get("up_rate")),
+    )
+
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "IP", width=150)
@@ -2092,9 +2153,11 @@ class PeersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.data = []
         self.SetName("Peers")
         self.init_accessible_virtual_list(pulse_navigation=True)
+        self.init_column_sort()
 
     def set_data(self, data):
         self.data = data
+        self._apply_sort()
         self.set_virtual_item_count(len(data))
 
     def OnGetItemText(self, item, col):
@@ -2122,7 +2185,14 @@ class PeersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
             rate /= 1024
         return f"{rate:.1f} TB/s"
 
-class TrackersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
+class TrackersListCtrl(ColumnSortMixin, AccessibleVirtualListMixin, wx.ListCtrl):
+    sort_key_funcs = (
+        lambda row: _detail_text_key(row.get("url")),
+        lambda row: _detail_text_key(row.get("status")),
+        lambda row: _detail_num_key(row.get("peers")),
+        lambda row: _detail_text_key(row.get("message")),
+    )
+
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES)
         self.InsertColumn(0, "URL", width=300)
@@ -2132,9 +2202,11 @@ class TrackersListCtrl(AccessibleVirtualListMixin, wx.ListCtrl):
         self.data = []
         self.SetName("Trackers")
         self.init_accessible_virtual_list(pulse_navigation=True)
+        self.init_column_sort()
 
     def set_data(self, data):
         self.data = data
+        self._apply_sort()
         self.set_virtual_item_count(len(data))
 
     def OnGetItemText(self, item, col):

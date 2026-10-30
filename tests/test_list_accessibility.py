@@ -72,11 +72,15 @@ class FakeVirtualList(main.AccessibleVirtualListMixin):
 class FakeFilesList(FakeVirtualList):
     _focused_file_key = main.FilesListCtrl._focused_file_key
     _index_of_file_key = main.FilesListCtrl._index_of_file_key
+    _apply_sort = main.FilesListCtrl._apply_sort
+    sort_key_funcs = main.FilesListCtrl.sort_key_funcs
     set_data = main.FilesListCtrl.set_data
 
     def __init__(self, data, focused=-1, item_count=0, has_focus=False):
         super().__init__(focused=focused, item_count=item_count, has_focus=has_focus)
         self.data = data
+        self.sort_col = -1
+        self.sort_asc = True
 
     def SetItemCount(self, n):
         super().SetItemCount(n)

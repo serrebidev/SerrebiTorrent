@@ -2,6 +2,10 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.35.0 - 2026-10-30
+
+- Sort Files, Peers and Trackers by clicking column headers (#420).
+
 ## v1.34.5 - 2026-10-30
 
 - Show Transmission torrent files in the Files tab (#419).

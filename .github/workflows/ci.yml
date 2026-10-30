@@ -24,6 +24,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The runner image's Homebrew snapshot predates python@3.15, which
+      # the current libtorrent-rasterbar bottle's bindings are built for;
+      # without an update the formula set and the bottle disagree.
+      - name: Update Homebrew
+        run: brew update
+
       - name: Install native runtime
         run: brew install libtorrent-rasterbar
 

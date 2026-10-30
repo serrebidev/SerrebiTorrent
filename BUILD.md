@@ -24,7 +24,7 @@ powershell -File tools\build_linux_remote.ps1 -Version 1.10.0
   `%USERPROFILE%\libtorrent-build\wheels`.
 - Linux builds must use the newest CPython 3.14 wheel in
   `/root/libtorrent-build/wheels` on `serrebiradio.com`.
-- macOS may use GitHub's native runner and Homebrew's Python 3.14 libtorrent.
+- macOS may use GitHub's native runner and Homebrew's Python 3.15 libtorrent.
 - GitHub releases must be published, never drafts.
 - The release script explicitly marks the new release as latest and non-draft.
 - The release script removes any remaining draft releases after publishing.

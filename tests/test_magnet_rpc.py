@@ -61,3 +61,49 @@ def test_magnet_add_and_tracker_merge_rpc():
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_connect_with_web_ui_address_uses_rpc_endpoint():
+    # Issue #416: connecting with the web UI address a user copies from a
+    # browser must reach the RPC endpoint instead of POSTing to the HTML page.
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers['Content-Length'])
+            self.rfile.read(length)
+            if self.path != '/transmission/rpc':
+                data = b'<html><title>Transmission Web</title></html>'
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if self.headers.get('X-Transmission-Session-Id') != 'test-session':
+                self.send_response(409)
+                self.send_header('X-Transmission-Session-Id', 'test-session')
+                self.end_headers()
+                return
+            data = json.dumps({'result': 'success', 'arguments': {
+                'version': '4.1.4 (test)', 'rpc-version': 18,
+                'rpc-version-minimum': 14, 'download-dir': '/downloads'}}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f'http://127.0.0.1:{server.server_port}'
+        for suffix in ('/transmission/web/', '/', '/transmission/rpc/'):
+            client = TransmissionClient(base + suffix, '', '')
+            assert client.test_connection() == '4.1.4 (test)', suffix
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

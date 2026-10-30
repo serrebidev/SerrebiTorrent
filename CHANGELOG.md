@@ -2,6 +2,10 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.34.5 - 2026-10-30
+
+- Show Transmission torrent files in the Files tab (#419).
+
 ## v1.34.4 - 2026-10-30
 
 - Update Homebrew before the macOS install.

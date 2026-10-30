@@ -158,6 +158,45 @@ def test_transmission_non_json_response_gets_actionable_error():
     assert "Synology DSM" in message
 
 
+def test_transmission_get_files_with_real_rpc_torrent_object():
+    # Issue #418: the Files tab was empty against a real Transmission
+    # server. transmission_rpc's Torrent has no ".files" attribute (the
+    # raw list lives in its fields / .get()), so _field() must fall back
+    # to the container's raw access. The dict-based fakes above masked
+    # this, so this test uses a real Torrent object.
+    from transmission_rpc.torrent import Torrent
+
+    real_torrent = Torrent(fields={
+        "id": 1,
+        "hashString": "a" * 40,
+        "files": [
+            {"name": "a.bin", "length": 100, "bytesCompleted": 50},
+            {"name": "dir/b.mkv", "length": 300, "bytesCompleted": 300},
+        ],
+        "fileStats": [
+            {"wanted": True, "priority": 1, "bytesCompleted": 50},
+            {"wanted": False, "priority": -1, "bytesCompleted": 300},
+        ],
+    })
+
+    class RealTorrentTransClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def get_torrent(self, torrent_id, arguments=None):
+            assert arguments == ['files', 'fileStats']
+            return real_torrent
+
+    with mock.patch.object(clients, "TransClient", RealTorrentTransClient):
+        client = clients.TransmissionClient("http://localhost:9091", "user", "pass")
+        files = client.get_files("a" * 40)
+
+    assert files == [
+        {"index": 0, "name": "a.bin", "size": 100, "progress": 0.5, "priority": 2},
+        {"index": 1, "name": "dir/b.mkv", "size": 300, "progress": 1.0, "priority": 0},
+    ]
+
+
 def test_transmission_url_credentials_used_when_profile_fields_blank():
     RecordingTransClient.calls = []
     with mock.patch.object(clients, "TransClient", RecordingTransClient):

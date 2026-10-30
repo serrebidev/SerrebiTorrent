@@ -1116,6 +1116,20 @@ class TransmissionClient(BaseClient):
             else:
                 if value is not None:
                     return value
+            # transmission_rpc containers (Torrent, FileStat, ...) have no
+            # attribute for some raw RPC fields -- e.g. Torrent has no
+            # ".files" attribute, only get_files() -- but they expose the
+            # raw response through .get(raw_key) / .fields. Without this
+            # fallback get_files() always returned [] against a real
+            # Transmission server (#418).
+            get = getattr(obj, "get", None)
+            if callable(get):
+                try:
+                    value = get(name)
+                except Exception:
+                    value = None
+                if value is not None:
+                    return value
         return default
 
     def _collection(self, value):

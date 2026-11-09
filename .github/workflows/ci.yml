@@ -1,7 +1,7 @@
 name: CI
 
-# macOS packages stay on GitHub runners (see the macos job); everything the
-# release publishes lives on Forgejo, so this workflow only needs read access
+# The macos job runs on the Forgejo Mac runner; everything the release
+# publishes lives on Forgejo, so this workflow only needs read access
 # plus a FORGEJO_TOKEN secret for the tagged-upload step below.
 permissions:
   contents: read
@@ -16,16 +16,24 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build the macOS app for and attach it to (blank = no upload)
+        required: false
+        type: string
 
 jobs:
   macos:
     runs-on: macos-15
+    env:
+      TAG: ${{ inputs.release_tag || github.ref_name }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
 
       # The runner image's Homebrew snapshot predates python@3.15, which
       # the current libtorrent-rasterbar bottle's bindings are built for;
@@ -76,7 +84,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach macOS package to Forgejo release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
         env:
           FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
           FORGEJO_HOST: git.serrebiradio.com
@@ -85,12 +93,12 @@ jobs:
           api="https://$FORGEJO_HOST/api/v1/repos/$FORGEJO_REPO"
           for attempt in {1..18}; do
             release="$(curl -s -H "Authorization: token $FORGEJO_TOKEN" \
-              "$api/releases/tags/$GITHUB_REF_NAME")"
+              "$api/releases/tags/$TAG")"
             id="$(echo "$release" | jq -r .id)"
             if [ -n "$id" ] && [ "$id" != "null" ]; then
               if echo "$release" | jq --arg name "$artifact" -e \
                 '[.assets[].name] | index($name) != null' >/dev/null; then
-                echo "$artifact is already attached to $GITHUB_REF_NAME."
+                echo "$artifact is already attached to $TAG."
                 exit 0
               fi
               if curl -sS -H "Authorization: token $FORGEJO_TOKEN" \

@@ -21,7 +21,7 @@ powershell -File tools\build_linux_remote.ps1 -Version 1.10.0
 - Builds de Windows devem usar o wheel mais recente de CPython 3.14 em `%USERPROFILE%\libtorrent-build\wheels`.
 - Builds de Linux devem usar o wheel mais recente de CPython 3.14 em `/root/libtorrent-build/wheels` no host `serrebiradio.com`.
 - O macOS pode usar o runner nativo do GitHub e o libtorrent para Python 3.14 fornecido pelo Homebrew.
-- Releases do GitHub devem ser publicados, nunca deixados como rascunho.
+- Releases do Forgejo devem ser publicados, nunca deixados como rascunho.
 - O script de release marca explicitamente a nova versão como a mais recente e como não rascunho.
 - O script de release remove quaisquer releases em rascunho restantes após a publicação.
 - Não distribua o pacote se a compilação mostrar avisos, erros ou incompatibilidades de dependências não resolvidos.

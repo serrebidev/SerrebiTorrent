@@ -1,7 +1,10 @@
 name: CI
 
+# macOS packages stay on GitHub runners (see the macos job); everything the
+# release publishes lives on Forgejo, so this workflow only needs read access
+# plus a FORGEJO_TOKEN secret for the tagged-upload step below.
 permissions:
-  contents: write
+  contents: read
 
 on:
   push:
@@ -72,16 +75,31 @@ jobs:
           path: dist/SerrebiTorrent-v*-macos-*.zip
           if-no-files-found: error
 
-      - name: Attach macOS package to tagged release
+      - name: Attach macOS package to Forgejo release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
-          GH_TOKEN: ${{ github.token }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          FORGEJO_HOST: git.serrebiradio.com
+          FORGEJO_REPO: serrebi/SerrebiTorrent
         run: |
+          api="https://$FORGEJO_HOST/api/v1/repos/$FORGEJO_REPO"
           for attempt in {1..18}; do
-            if gh release upload "$GITHUB_REF_NAME" "dist/$artifact" --clobber; then
-              exit 0
+            release="$(curl -s -H "Authorization: token $FORGEJO_TOKEN" \
+              "$api/releases/tags/$GITHUB_REF_NAME")"
+            id="$(echo "$release" | jq -r .id)"
+            if [ -n "$id" ] && [ "$id" != "null" ]; then
+              if echo "$release" | jq --arg name "$artifact" -e \
+                '[.assets[].name] | index($name) != null' >/dev/null; then
+                echo "$artifact is already attached to $GITHUB_REF_NAME."
+                exit 0
+              fi
+              if curl -sS -H "Authorization: token $FORGEJO_TOKEN" \
+                -F "attachment=@dist/$artifact" \
+                "$api/releases/$id/assets?name=$artifact"; then
+                exit 0
+              fi
             fi
             sleep 10
           done
-          echo "The tagged GitHub release was not available for the macOS upload." >&2
+          echo "The tagged Forgejo release was not available for the macOS upload." >&2
           exit 1

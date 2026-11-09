@@ -47,7 +47,7 @@ Python installation is not required.
 **macOS**
 
 Download and extract the macOS ZIP produced for the release. macOS packages
-are built on a native GitHub-hosted macOS runner and include their required
+are built on a native macOS runner and include their required
 Python runtime and libtorrent binding.
 
 ## First-time setup
@@ -135,18 +135,18 @@ correctly rather than being based on lifetime downloaded traffic.
 clean build environment, installs the newest locally maintained CPython 3.14
 libtorrent wheel, packages and verifies Windows locally, and asks
 `root@serrebiradio.com` to build and verify Linux. Tagged macOS packages are
-built natively by GitHub Actions.
+built natively on a macOS runner.
 
 Prereqs:
 - Python 3.14
 - A validated libtorrent wheel from the `Libtorrent Weekly Update` task
-- Git + GitHub CLI (`gh auth login` completed)
+- Git + a Forgejo API token (`FORGEJO_TOKEN` set)
 - Code signing cert installed
 - SignTool available (default path used, or set `SIGNTOOL_PATH`)
 
 Commands:
 - `build_exe.bat build` — builds, signs, and zips locally.
-- `build_exe.bat release` — auto-bumps, builds Windows locally and Linux over SSH, signs, archives, tags, pushes, creates the GitHub release, and uploads the update manifest.
+- `build_exe.bat release` — auto-bumps, builds Windows locally and Linux over SSH, signs, archives, tags, pushes, creates the Forgejo release, and uploads the update manifest.
 - `build_exe.bat dry-run` — shows what it would do without modifying anything.
 - `powershell -File tools\build_linux_remote.ps1 -Version X.Y.Z` — builds only the Linux package on the configured SSH host.
 
@@ -159,7 +159,7 @@ Python or a Visual C++ runtime separately.
 
 ## Auto-updater
 
-The app checks GitHub Releases for updates. Enable or disable the startup check in Local Session Settings, or run Tools -> Check for Updates at any time.
+The app checks Forgejo releases for updates. Enable or disable the startup check in Local Session Settings, or run Tools -> Check for Updates at any time.
 
 Update flow:
 1. Downloads the release ZIP using the update manifest asset (`SerrebiTorrent-update.json`).

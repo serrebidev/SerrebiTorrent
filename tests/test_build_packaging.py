@@ -56,6 +56,9 @@ def test_native_build_policy_uses_local_windows_ssh_linux_and_actions_macos():
     assert "windows-latest" not in workflow
     assert "ubuntu-latest" not in workflow
     assert "actions/upload-artifact@v7" in workflow
+    assert "git.serrebiradio.com" in workflow
+    assert "FORGEJO_TOKEN" in workflow
+    assert "gh release upload" not in workflow
 
 
 def test_every_libtorrent_attribute_used_exists_in_the_shipped_libtorrent():

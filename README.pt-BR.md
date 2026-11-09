@@ -42,7 +42,7 @@ O pacote Linux inclui seu próprio runtime de Python e o libtorrent. Não é nec
 
 **macOS**
 
-Baixe e extraia o ZIP de macOS gerado para a versão. Os pacotes de macOS são compilados em um runner nativo de macOS hospedado pelo GitHub e incluem o runtime de Python e o binding de libtorrent necessários.
+Baixe e extraia o ZIP de macOS gerado para a versão. Os pacotes de macOS são compilados em um runner nativo de macOS e incluem o runtime de Python e o binding de libtorrent necessários.
 
 ## Primeira configuração
 
@@ -84,18 +84,18 @@ Se o torrent já existir, o SerrebiTorrent compara os trackers do novo magnet co
 
 ## Compilação
 
-`build_exe.bat` coordena os releases a partir da máquina Windows usada para publicação. Ele cria um ambiente limpo de compilação, instala o wheel mais recente de libtorrent para CPython 3.14 mantido localmente, empacota e verifica o Windows localmente e solicita a `root@serrebiradio.com` que compile e verifique o Linux. Pacotes de macOS associados a tags são compilados nativamente pelo GitHub Actions.
+`build_exe.bat` coordena os releases a partir da máquina Windows usada para publicação. Ele cria um ambiente limpo de compilação, instala o wheel mais recente de libtorrent para CPython 3.14 mantido localmente, empacota e verifica o Windows localmente e solicita a `root@serrebiradio.com` que compile e verifique o Linux. Pacotes de macOS associados a tags são compilados nativamente em um runner de macOS.
 
 Pré-requisitos:
 - Python 3.14
 - Um wheel validado de libtorrent proveniente da tarefa `Libtorrent Weekly Update`
-- Git + GitHub CLI (`gh auth login` concluído)
+- Git + token da API do Forgejo (`FORGEJO_TOKEN` definido)
 - Certificado de assinatura de código instalado
 - SignTool disponível (usa o caminho padrão ou a variável `SIGNTOOL_PATH`)
 
 Comandos:
 - `build_exe.bat build` — compila, assina e cria o ZIP localmente.
-- `build_exe.bat release` — incrementa a versão automaticamente, compila Windows localmente e Linux via SSH, assina, arquiva, cria tag, envia para o GitHub, cria o release e envia o manifesto de atualização.
+- `build_exe.bat release` — incrementa a versão automaticamente, compila Windows localmente e Linux via SSH, assina, arquiva, cria tag, envia para o Forgejo, cria o release e envia o manifesto de atualização.
 - `build_exe.bat dry-run` — mostra o que seria feito sem modificar nada.
 - `powershell -File tools\build_linux_remote.ps1 -Version X.Y.Z` — compila apenas o pacote Linux no host SSH configurado.
 
@@ -105,7 +105,7 @@ A saída do Windows fica em `dist\SerrebiTorrent\`; distribua a pasta inteira, n
 
 ## Atualizador automático
 
-O aplicativo consulta os Releases do GitHub em busca de atualizações. A verificação na inicialização pode ser ativada ou desativada em Configurações da sessão local, e também é possível executar Ferramentas -> Verificar atualizações a qualquer momento.
+O aplicativo consulta os releases do Forgejo em busca de atualizações. A verificação na inicialização pode ser ativada ou desativada em Configurações da sessão local, e também é possível executar Ferramentas -> Verificar atualizações a qualquer momento.
 
 Fluxo de atualização:
 1. Baixa o ZIP do release usando o manifesto de atualização (`SerrebiTorrent-update.json`).

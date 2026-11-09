@@ -2,6 +2,10 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.35.1 - 2026-11-09
+
+- Point the updater at Forgejo releases.
+
 ## v1.35.0 - 2026-10-30
 
 - Sort Files, Peers and Trackers by clicking column headers (#420).

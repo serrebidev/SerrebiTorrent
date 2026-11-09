@@ -31,7 +31,7 @@ from updater import (
     APP_VERSION
 )
 
-ASSET_URL = "https://github.com/serrebidev/SerrebiTorrent/releases/download/v1.0.0/app.zip"
+ASSET_URL = "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/download/v1.0.0/app.zip"
 SIGNING_THUMBPRINT = "A" * 40
 
 
@@ -210,7 +210,7 @@ def test_validate_manifest_version_mismatch():
     manifest = {
         "version": "1.0.0",
         "asset_filename": "app.zip",
-        "download_url": "https://github.com/serrebidev/SerrebiTorrent/releases/download/v1.0.1/app.zip",
+        "download_url": "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/download/v1.0.1/app.zip",
         "sha256": "a" * 64,
         "published_at": "2023-01-01",
         "signing_thumbprint": SIGNING_THUMBPRINT,
@@ -247,7 +247,7 @@ def test_validate_manifest_rejects_invalid_published_at():
         validate_manifest(manifest, release)
 
 
-def test_validate_manifest_rejects_non_github_download_url():
+def test_validate_manifest_rejects_non_forgejo_download_url():
     release = release_with_asset()
     manifest = {
         "version": "1.0.0",
@@ -266,7 +266,7 @@ def test_validate_manifest_rejects_release_asset_mismatch():
     manifest = {
         "version": "1.0.0",
         "asset_filename": "app.zip",
-        "download_url": "https://github.com/serrebidev/SerrebiTorrent/releases/download/v1.0.0/other.zip",
+        "download_url": "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/download/v1.0.0/other.zip",
         "sha256": "a" * 64,
         "published_at": "2023-01-01",
         "signing_thumbprint": SIGNING_THUMBPRINT,
@@ -428,7 +428,7 @@ def test_download_manifest_rejects_large_content_length(monkeypatch):
         "assets": [
             {
                 "name": updater.UPDATE_MANIFEST_ASSET,
-                "browser_download_url": "https://github.com/serrebidev/SerrebiTorrent/releases/download/v1.0.0/SerrebiTorrent-update.json",
+                "browser_download_url": "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/download/v1.0.0/SerrebiTorrent-update.json",
             }
         ]
     }
@@ -467,7 +467,7 @@ def test_validate_manifest_rejects_missing_signing_thumbprint():
 @patch('updater.fetch_latest_release')
 @patch('updater.download_manifest')
 def test_check_for_update_available(mock_download, mock_fetch):
-    url = "https://github.com/serrebidev/SerrebiTorrent/releases/download/v99.99.99/app.zip"
+    url = "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/download/v99.99.99/app.zip"
     mock_fetch.return_value = release_with_asset(tag="v99.99.99", url=url) # Definitely newer
     mock_download.return_value = {
         "version": "99.99.99",
@@ -487,7 +487,7 @@ def test_check_for_update_available(mock_download, mock_fetch):
 @patch('updater.fetch_latest_release')
 @patch('updater.download_manifest')
 def test_check_for_updates_returns_result_object(mock_download, mock_fetch):
-    url = "https://github.com/serrebidev/SerrebiTorrent/releases/download/v99.99.99/app.zip"
+    url = "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/download/v99.99.99/app.zip"
     mock_fetch.return_value = release_with_asset(tag="v99.99.99", url=url)
     mock_download.return_value = {
         "version": "99.99.99",
@@ -815,7 +815,7 @@ def test_rate_limited_check_falls_back_to_latest_manifest(mock_fetch, mock_manif
     mock_manifest.return_value = {
         "version": "99.99.99",
         "asset_filename": "app.zip",
-        "download_url": "https://github.com/serrebidev/SerrebiTorrent/releases/download/v99.99.99/app.zip",
+        "download_url": "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/download/v99.99.99/app.zip",
         "sha256": "a" * 64,
         "published_at": "2023-01-01",
         "signing_thumbprint": SIGNING_THUMBPRINT,
@@ -826,7 +826,7 @@ def test_rate_limited_check_falls_back_to_latest_manifest(mock_fetch, mock_manif
     assert result.status == "update_available"
     assert result.info.latest_version == "99.99.99"
     assert mock_manifest.call_args[0][0] == (
-        "https://github.com/serrebidev/SerrebiTorrent/releases/latest/download/SerrebiTorrent-update.json"
+        "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/latest/download/SerrebiTorrent-update.json"
     )
 
 
@@ -837,7 +837,7 @@ def test_rate_limited_fallback_rejects_foreign_download_url(mock_fetch, mock_man
     mock_manifest.return_value = {
         "version": "99.99.99",
         "asset_filename": "app.zip",
-        "download_url": "https://github.com/someone/else/releases/download/v99.99.99/app.zip",
+        "download_url": "https://git.serrebiradio.com/someone/else/releases/download/v99.99.99/app.zip",
         "sha256": "a" * 64,
         "published_at": "2023-01-01",
         "signing_thumbprint": SIGNING_THUMBPRINT,
@@ -866,7 +866,7 @@ def test_download_file_rejects_redirect_to_untrusted_host(tmp_path, monkeypatch)
 
     dest = tmp_path / "update.zip"
 
-    with pytest.raises(UpdateError, match="HTTPS GitHub release asset"):
+    with pytest.raises(UpdateError, match="HTTPS Forgejo release asset"):
         download_file(ASSET_URL, str(dest))
 
     assert not dest.exists()
@@ -879,9 +879,9 @@ def test_manifest_download_rejects_redirect_to_untrusted_host(monkeypatch):
     response.close = MagicMock()
     monkeypatch.setattr(updater.requests, "get", MagicMock(return_value=response))
 
-    with pytest.raises(UpdateError, match="HTTPS GitHub release asset"):
+    with pytest.raises(UpdateError, match="HTTPS Forgejo release asset"):
         updater._download_manifest_url(
-            "https://github.com/serrebidev/SerrebiTorrent/releases/latest/download/SerrebiTorrent-update.json"
+            "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/latest/download/SerrebiTorrent-update.json"
         )
 
     response.close.assert_called_once()
@@ -901,7 +901,7 @@ def test_download_redirect_is_validated_before_second_request(monkeypatch):
 
     monkeypatch.setattr(updater.requests, "get", fake_get)
 
-    with pytest.raises(UpdateError, match="HTTPS GitHub release asset"):
+    with pytest.raises(UpdateError, match="HTTPS Forgejo release asset"):
         updater._get_validated_download_response(
             ASSET_URL,
             timeout=updater.DOWNLOAD_TIMEOUT,
@@ -969,14 +969,14 @@ def test_download_manifest_rejects_non_object_json(monkeypatch):
         status_code=200,
         chunks=[b"[]"],
         headers={"Content-Length": "2"},
-        url="https://github.com/serrebidev/SerrebiTorrent/releases/download/v1.2.3/update-manifest.json",
+        url="https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/download/v1.2.3/update-manifest.json",
     )
     monkeypatch.setattr(updater, "_get_validated_download_response", lambda *args, **kwargs: response)
     monkeypatch.setattr(updater, "_validate_download_response_url", lambda _response: None)
 
     with pytest.raises(updater.UpdateError, match="JSON object"):
         updater._download_manifest_url(
-            "https://github.com/serrebidev/SerrebiTorrent/releases/latest/download/update-manifest.json"
+            "https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases/latest/download/update-manifest.json"
         )
 
 

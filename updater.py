@@ -19,8 +19,8 @@ import requests
 
 from app_version import APP_VERSION
 
-GITHUB_OWNER = "serrebidev"
-GITHUB_REPO = "SerrebiTorrent"
+FORGEJO_HOST = "git.serrebiradio.com"
+FORGEJO_REPO = "serrebi/SerrebiTorrent"
 UPDATE_MANIFEST_ASSET = "SerrebiTorrent-update.json"
 APP_EXE_NAME = "SerrebiTorrent.exe"
 
@@ -38,9 +38,7 @@ MAX_UPDATE_REDIRECTS = 5
 _SEMVER_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 _STRICT_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 _ALLOWED_DOWNLOAD_HOSTS = {
-    "github.com",
-    "objects.githubusercontent.com",
-    "release-assets.githubusercontent.com",
+    "git.serrebiradio.com",
 }
 
 
@@ -191,7 +189,7 @@ def _validate_download_url(url: str) -> None:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     if parsed.scheme.lower() != "https" or host not in _ALLOWED_DOWNLOAD_HOSTS:
-        raise UpdateError("Update download URL must be an HTTPS GitHub release asset.")
+        raise UpdateError("Update download URL must be an HTTPS Forgejo release asset.")
 
 
 def _validate_download_response_url(response) -> None:
@@ -227,46 +225,46 @@ def _rate_limit_message(headers: Mapping[str, str]) -> str:
     reset = headers.get("X-RateLimit-Reset")
     if reset and reset.isdigit():
         reset_dt = datetime.datetime.utcfromtimestamp(int(reset))
-        return f"GitHub API rate limit reached. Try again after {reset_dt:%Y-%m-%d %H:%M:%SZ}."
-    return "GitHub API rate limit reached. Try again later."
+        return f"Forgejo API rate limit reached. Try again after {reset_dt:%Y-%m-%d %H:%M:%SZ}."
+    return "Forgejo API rate limit reached. Try again later."
 
 
 def fetch_latest_release() -> Dict[str, Any]:
-    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+    url = f"https://{FORGEJO_HOST}/api/v1/repos/{FORGEJO_REPO}/releases/latest"
     headers = {
-        "Accept": "application/vnd.github+json",
+        "Accept": "application/json",
         "User-Agent": "SerrebiTorrent-Updater",
     }
     try:
         response = requests.get(url, headers=headers, timeout=API_TIMEOUT, stream=True)
     except requests.RequestException as exc:
-        raise UpdateError(f"Network error while contacting GitHub: {exc}") from exc
+        raise UpdateError(f"Network error while contacting Forgejo: {exc}") from exc
     try:
         if response.status_code == 429 or (response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0"):
             raise RateLimitError(_rate_limit_message(response.headers))
         if response.status_code != 200:
-            raise UpdateError(f"GitHub API error: {response.status_code} {response.reason}")
+            raise UpdateError(f"Forgejo API error: {response.status_code} {response.reason}")
         content_length = response.headers.get("Content-Length")
         if content_length:
             try:
                 expected_size = int(content_length)
             except ValueError as exc:
-                raise UpdateError("GitHub API returned an invalid Content-Length.") from exc
+                raise UpdateError("Forgejo API returned an invalid Content-Length.") from exc
             if expected_size < 0 or expected_size > MAX_UPDATE_RELEASE_BYTES:
-                raise UpdateError("GitHub release metadata is larger than the allowed size.")
+                raise UpdateError("Forgejo release metadata is larger than the allowed size.")
         content = bytearray()
         for chunk in response.iter_content(64 * 1024):
             if not chunk:
                 continue
             content.extend(chunk)
             if len(content) > MAX_UPDATE_RELEASE_BYTES:
-                raise UpdateError("GitHub release metadata is larger than the allowed size.")
+                raise UpdateError("Forgejo release metadata is larger than the allowed size.")
         try:
             release = json.loads(bytes(content).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise UpdateError(f"Failed to parse GitHub API response: {exc}") from exc
+            raise UpdateError(f"Failed to parse Forgejo API response: {exc}") from exc
         if not isinstance(release, dict):
-            raise UpdateError("GitHub API response must be a JSON object.")
+            raise UpdateError("Forgejo API response must be a JSON object.")
         return release
     finally:
         close = getattr(response, "close", None)
@@ -334,10 +332,9 @@ def _download_manifest_url(url: str) -> Dict[str, Any]:
 def _release_from_latest_manifest() -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Rebuild the release from the manifest when the API is rate limited.
 
-    github.com/.../releases/latest/download/ is not counted against the API
-    limit, which many apps behind one IP share unauthenticated.
+    The web latest/download/ route is not counted against the API limit.
     """
-    base = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
+    base = f"https://{FORGEJO_HOST}/{FORGEJO_REPO}/releases"
     manifest = _download_manifest_url(f"{base}/latest/download/{UPDATE_MANIFEST_ASSET}")
     version = parse_semver(str(manifest.get("version", "")))
     asset_name = str(manifest.get("asset_filename", ""))
@@ -381,7 +378,7 @@ def validate_manifest(manifest: Dict[str, Any], release: Dict[str, Any]) -> Dict
     asset_url = str(asset["browser_download_url"])
     _validate_download_url(asset_url)
 
-    # GitHub exposes a per-asset digest for newer releases. When present it is an
+    # Some hosts expose a per-asset digest for newer releases. When present it is an
     # independent copy of the archive checksum, so a stale or inconsistent
     # manifest is caught before anything is downloaded.
     digest = str(asset.get("digest") or "").strip().lower()

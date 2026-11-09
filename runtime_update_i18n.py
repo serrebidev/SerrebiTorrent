@@ -50,7 +50,7 @@ _PT_BR = {
 _PREFIX_PT_BR = (
     ("Update failed: ", "Falha na atualização: "),
     ("Update check failed: ", "Falha ao verificar atualizações: "),
-    ("Network error while contacting GitHub: ", "Erro de rede ao contatar o GitHub: "),
+    ("Network error while contacting Forgejo: ", "Erro de rede ao contatar o Forgejo: "),
     ("Network error while downloading update: ", "Erro de rede ao baixar a atualização: "),
     ("Failed to start update helper: ", "Falha ao iniciar o auxiliar de atualização: "),
     ("Authenticode verification failed: ", "Falha na verificação Authenticode: "),

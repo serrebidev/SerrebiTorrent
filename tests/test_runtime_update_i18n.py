@@ -19,8 +19,8 @@ def test_update_messages_translate_to_pt_br():
 
 def test_update_prefix_translation_preserves_detail():
     assert runtime_update_i18n.tr_update(
-        "Network error while contacting GitHub: boom", "pt-BR"
-    ) == "Erro de rede ao contatar o GitHub: boom"
+        "Network error while contacting Forgejo: boom", "pt-BR"
+    ) == "Erro de rede ao contatar o Forgejo: boom"
 
 
 def test_runtime_installs_update_localization_lazily():

@@ -332,7 +332,9 @@ def _download_manifest_url(url: str) -> Dict[str, Any]:
 def _release_from_latest_manifest() -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Rebuild the release from the manifest when the API is rate limited.
 
-    The web latest/download/ route is not counted against the API limit.
+    Where the web latest/download/ route is unavailable (Forgejo has no
+    such route) the manifest fetch fails and the caller keeps the original
+    rate-limit error.
     """
     base = f"https://{FORGEJO_HOST}/{FORGEJO_REPO}/releases"
     manifest = _download_manifest_url(f"{base}/latest/download/{UPDATE_MANIFEST_ASSET}")

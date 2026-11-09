@@ -294,6 +294,8 @@ def test_verify_authenticode_allows_numeric_unknownerror_with_matching_thumbprin
     result.returncode = 0
     result.stdout = '{"Status":1,"StatusMessage":"chain not trusted","Thumbprint":"AA BB"}'
     result.stderr = ""
+    # Mock the PowerShell lookup too: without it the test needs a real pwsh on PATH.
+    monkeypatch.setattr(updater, "_powershell_executables", lambda: ("pwsh",))
     monkeypatch.setattr("updater.subprocess.run", lambda *args, **kwargs: result)
 
     verify_authenticode("SerrebiTorrent.exe", ["AABB"])

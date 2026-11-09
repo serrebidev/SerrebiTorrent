@@ -21,7 +21,7 @@ Um gerenciador de torrents para Windows, desenvolvido com foco em uso por teclad
 
 ## Download e instalação
 
-Baixe a versão mais recente na [página de Releases](https://github.com/serrebidev/SerrebiTorrent/releases).
+Baixe a versão mais recente na [página de Releases](https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases).
 
 **Windows portátil**
 
@@ -57,7 +57,7 @@ Ferramentas -> Pesquisar torrents... (`Ctrl+F`) pesquisa Knaben, The Pirate Bay,
 
 **Sites de pesquisa...** permite desativar indexadores individualmente, e indexadores adicionados em versões futuras são pesquisados por padrão. **Meus indexadores...** permite adicionar um endpoint Torznab ou Newznab próprio — uma instalação inteira do Prowlarr ou Jackett conta como uma única fonte. É assim que trackers privados são pesquisados: essas ferramentas já armazenam login e passkey, então o SerrebiTorrent nunca armazena a senha do tracker. O `.torrent` autenticado de um tracker privado é obtido com suas próprias credenciais no momento em que é adicionado, em vez de ser convertido em um magnet que o swarm recusaria.
 
-O SerrebiTorrent não é distribuído com indexadores próprios configurados — apenas com as fontes públicas citadas acima. Se o [blindDL](https://github.com/serrebidev/blindDL) estiver instalado no mesmo computador e tiver indexadores configurados, a pesquisa os importa na primeira vez que é aberta, pois ambos usam o mesmo formato de feed. A importação só adiciona entradas novas: um indexador editado aqui nunca é sobrescrito.
+O SerrebiTorrent não é distribuído com indexadores próprios configurados — apenas com as fontes públicas citadas acima. Se o [blindDL](https://git.serrebiradio.com/serrebi/blindDL) estiver instalado no mesmo computador e tiver indexadores configurados, a pesquisa os importa na primeira vez que é aberta, pois ambos usam o mesmo formato de feed. A importação só adiciona entradas novas: um indexador editado aqui nunca é sobrescrito.
 
 ## Configurações
 
@@ -77,7 +77,7 @@ Se o torrent já existir, o SerrebiTorrent compara os trackers do novo magnet co
 ## Executar a partir do código-fonte (desenvolvedores)
 
 1. Instale Python 3.14.
-2. `git clone https://github.com/serrebidev/SerrebiTorrent`
+2. `git clone https://git.serrebiradio.com/serrebi/SerrebiTorrent`
 3. `python -m pip install -r requirements.txt`
 4. Certifique-se de que a extensão `libtorrent` para Python 3.14 no Windows e suas DLLs estejam instaladas ou disponíveis no `PATH` — ela não é publicada no PyPI.
 5. Inicie com: `python main.py`
@@ -144,4 +144,4 @@ Pull requests são bem-vindos. Se o SerrebiTorrent foi útil, abra uma PR com um
 
 ## Comunidade e suporte
 
-Relate bugs e solicite recursos em [Issues](https://github.com/serrebidev/SerrebiTorrent/issues). Para dúvidas, feedback e novidades de versões, entre no [grupo SerrebiProjects no Telegram](https://t.me/SerrebiProjects).
+Relate bugs e solicite recursos em [Issues](https://git.serrebiradio.com/serrebi/SerrebiTorrent/issues). Para dúvidas, feedback e novidades de versões, entre no [grupo SerrebiProjects no Telegram](https://t.me/SerrebiProjects).

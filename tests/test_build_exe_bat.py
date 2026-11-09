@@ -19,19 +19,22 @@ def test_release_checks_untracked_packageable_paths():
     assert '".pyd"' in script
 
 
-def test_release_verifies_github_latest_endpoint():
+def test_release_verifies_forgejo_latest_endpoint():
     script = (ROOT / "build_exe.bat").read_text(encoding="utf-8")
+    release = (ROOT / "tools" / "forgejo_release.py").read_text(encoding="utf-8")
 
-    assert "call :verify_latest_release || exit /b 1" in script
-    assert 'gh api "repos/%GITHUB_OWNER%/%GITHUB_REPO%/releases/latest" --jq ".tag_name"' in script
-    assert "The updater will keep reporting the old release until this is corrected." in script
+    assert "call :forgejo_release || goto :error" in script
+    assert "tools\\forgejo_release.py" in script
+    assert '--host "%FORGEJO_HOST%" --repo "%FORGEJO_REPO%"' in script
+    assert "/releases/latest" in release
+    assert "The updater will keep reporting the old release until this is corrected." in release
 
 
 def test_dry_run_fetches_tags_like_release():
     script = (ROOT / "build_exe.bat").read_text(encoding="utf-8")
 
     dry_run_block = script[script.index('if /I "%MODE%"=="dry-run" (') :]
-    assert "git fetch --tags" in dry_run_block
+    assert "git fetch --tags forgejo" in dry_run_block
 
 
 def test_release_uses_requested_signing_thumbprint_for_signtool():
@@ -51,9 +54,12 @@ def test_latest_zip_failure_stops_build():
 
 def test_failed_release_create_cleans_drafts():
     script = (ROOT / "build_exe.bat").read_text(encoding="utf-8")
+    release = (ROOT / "tools" / "forgejo_release.py").read_text(encoding="utf-8")
 
-    failure_block = script[script.index("if errorlevel 1 (\n    echo GitHub release creation failed.") :]
-    assert "call :delete_draft_releases" in failure_block.split(")", 1)[0]
+    failure_block = script[script.index("if errorlevel 1 (\n    echo Forgejo release creation failed.") :]
+    assert "exit /b 1" in failure_block.split(")", 1)[0]
+    assert "sweep_drafts(client)" in release
+    assert "Cleaning up draft release" in release
 
 
 def test_build_verifies_the_frozen_runtime_before_signing():

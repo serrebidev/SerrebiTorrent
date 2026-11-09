@@ -3341,7 +3341,7 @@ class MainFrame(MagnetIntakeMixin, wx.Frame):
         info.SetVersion(APP_VERSION)
         info.SetDescription("A Windows desktop torrent manager designed for keyboard-first use and screen readers.")
         info.SetCopyright("Copyright © 2025-2026 serrebidev and contributors")
-        info.SetWebSite("https://github.com/serrebidev/SerrebiTorrent")
+        info.SetWebSite("https://git.serrebiradio.com/serrebi/SerrebiTorrent")
         info.AddDeveloper("serrebidev")
         wx.adv.AboutBox(info)
 

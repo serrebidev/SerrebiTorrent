@@ -6,8 +6,8 @@ set "EXE_NAME=SerrebiTorrent.exe"
 set "VERSION_FILE=app_version.py"
 set "MANIFEST_NAME=SerrebiTorrent-update.json"
 set "DEFAULT_SIGNTOOL=C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
-set "GITHUB_OWNER=serrebidev"
-set "GITHUB_REPO=SerrebiTorrent"
+set "FORGEJO_HOST=git.serrebiradio.com"
+set "FORGEJO_REPO=serrebi/SerrebiTorrent"
 set "PYTHON_CMD=%LOCALAPPDATA%\Programs\Python\Launcher\py.exe -3.14"
 if not exist "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" set "PYTHON_CMD=py.exe -3.14"
 
@@ -43,15 +43,15 @@ if /I "%MODE%"=="release" if defined SIGN_CERT_THUMBPRINT (
 
 if /I "%MODE%"=="release" (
     where git >nul 2>&1 || (echo Git not found in PATH.& goto :error)
-    where gh >nul 2>&1 || (echo GitHub CLI ^(gh^) not found in PATH.& goto :error)
-    call :detect_github
+    if not defined FORGEJO_TOKEN (echo FORGEJO_TOKEN is not set. Copy it from /root/forgejo-muse-token.txt on root@serrebiradio.com.& goto :error)
+    call :detect_forgejo
     call :ensure_tracked_tree_clean || goto :error
     call :ensure_packageable_untracked_clean || goto :error
 )
 
 if /I "%MODE%"=="release" (
     echo Fetching tags...
-    git fetch --tags
+    git fetch --tags forgejo
     if errorlevel 1 (
         echo Failed to fetch tags.
         goto :error
@@ -59,7 +59,7 @@ if /I "%MODE%"=="release" (
 )
 if /I "%MODE%"=="dry-run" (
     echo Fetching tags...
-    git fetch --tags
+    git fetch --tags forgejo
     if errorlevel 1 (
         echo Failed to fetch tags.
         goto :error
@@ -87,7 +87,7 @@ if /I "%MODE%"=="release" (
 if %DRY_RUN%==1 (
     echo DRY RUN: would build, sign, and zip version !NEXT_VERSION!.
     if /I "%MODE%"=="release" (
-        echo DRY RUN: would create manifest, commit, tag, push, and create GitHub release.
+        echo DRY RUN: would create manifest, commit, tag, push, and create Forgejo release.
     )
     popd
     exit /b 0
@@ -172,7 +172,7 @@ if errorlevel 1 goto :error
 
 if /I "%MODE%"=="release" (
     if defined SERREBITORRENT_LINUX_TARBALL (
-        rem cloud-release.yml already built Linux on a GitHub runner.
+        rem A prebuilt Linux package was supplied; skip the SSH build.
         echo Using prebuilt Linux package "!SERREBITORRENT_LINUX_TARBALL!"...
         copy /Y "!SERREBITORRENT_LINUX_TARBALL!" "dist\%APP_NAME%-v!NEXT_VERSION!-linux-x86_64.tar.gz" >nul
         if errorlevel 1 goto :error
@@ -183,7 +183,7 @@ if /I "%MODE%"=="release" (
     )
     call :create_manifest || goto :error
     call :git_commit_tag_push || goto :error
-    call :gh_release || goto :error
+    call :forgejo_release || goto :error
 )
 
 echo ========================================
@@ -230,7 +230,7 @@ exit /b 0
 
 :create_manifest
 set "MANIFEST_PATH=%CD%\dist\%MANIFEST_NAME%"
-set "DOWNLOAD_URL=https://github.com/%GITHUB_OWNER%/%GITHUB_REPO%/releases/download/v%NEXT_VERSION%/%ZIP_NAME%"
+set "DOWNLOAD_URL=https://%FORGEJO_HOST%/%FORGEJO_REPO%/releases/download/v%NEXT_VERSION%/%ZIP_NAME%"
 set "EXE_PATH=%CD%\dist\%APP_NAME%\%EXE_NAME%"
 set "SIGNING_THUMBPRINT_ARG="
 if defined SIGN_CERT_THUMBPRINT (
@@ -263,12 +263,12 @@ if errorlevel 1 (
 )
 for /f "usebackq delims=" %%B in (`git rev-parse --abbrev-ref HEAD`) do set "CURRENT_BRANCH=%%B"
 if "%CURRENT_BRANCH%"=="" set "CURRENT_BRANCH=main"
-git push origin "%CURRENT_BRANCH%"
+git push forgejo "%CURRENT_BRANCH%"
 if errorlevel 1 (
     echo Git push failed.
     exit /b 1
 )
-git push origin "v%NEXT_VERSION%"
+git push forgejo "v%NEXT_VERSION%"
 if errorlevel 1 (
     echo Git tag push failed.
     exit /b 1
@@ -321,58 +321,17 @@ if "!FOUND_PACKAGEABLE_UNTRACKED!"=="1" (
 )
 exit /b 0
 
-:gh_release
-echo Creating GitHub release v%NEXT_VERSION%...
-call :delete_draft_releases || exit /b 1
-gh release create "v%NEXT_VERSION%" "%ZIP_PATH%" "%MANIFEST_PATH%" ^
-    "dist\%APP_NAME%-v%NEXT_VERSION%-linux-x86_64.tar.gz" ^
-    --title "V%NEXT_VERSION%" ^
-    --notes-file "%RELEASE_NOTES%" ^
-    --latest
+:forgejo_release
+echo Creating Forgejo release v%NEXT_VERSION%...
+"%BUILD_PYTHON%" tools\forgejo_release.py --host "%FORGEJO_HOST%" --repo "%FORGEJO_REPO%" --tag "v%NEXT_VERSION%" --title "V%NEXT_VERSION%" --notes-file "%RELEASE_NOTES%" --assets "%ZIP_PATH%" "%MANIFEST_PATH%" "dist\%APP_NAME%-v%NEXT_VERSION%-linux-x86_64.tar.gz"
 if errorlevel 1 (
-    echo GitHub release creation failed.
-    call :delete_draft_releases
-    exit /b 1
-)
-echo Ensuring v%NEXT_VERSION% is published and marked as Latest...
-gh release edit "v%NEXT_VERSION%" --draft=false --latest
-if errorlevel 1 (
-    echo Failed to publish v%NEXT_VERSION% as Latest.
-    exit /b 1
-)
-call :delete_draft_releases || exit /b 1
-call :verify_latest_release || exit /b 1
-exit /b 0
-
-:delete_draft_releases
-echo Checking for draft releases...
-powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $repo='%GITHUB_OWNER%/%GITHUB_REPO%'; $releases = @(gh release list --repo $repo --limit 100 --json tagName,isDraft | ConvertFrom-Json); foreach ($release in $releases) { if ($release.isDraft -eq $true) { Write-Host ('Deleting draft release ' + $release.tagName + '...'); gh release delete $release.tagName --repo $repo --yes } }"
-if errorlevel 1 (
-    echo Failed to remove draft releases.
+    echo Forgejo release creation failed.
     exit /b 1
 )
 exit /b 0
 
-:verify_latest_release
-echo Verifying GitHub /releases/latest points to v%NEXT_VERSION%...
-set "API_LATEST_TAG="
-for /f "delims=" %%T in ('gh api "repos/%GITHUB_OWNER%/%GITHUB_REPO%/releases/latest" --jq ".tag_name" 2^>nul') do (
-    set "API_LATEST_TAG=%%T"
-)
-if not defined API_LATEST_TAG (
-    echo Failed to read GitHub /releases/latest for %GITHUB_OWNER%/%GITHUB_REPO%.
-    exit /b 1
-)
-if /I not "!API_LATEST_TAG!"=="v%NEXT_VERSION%" (
-    echo GitHub /releases/latest is !API_LATEST_TAG!, expected v%NEXT_VERSION%.
-    echo The updater will keep reporting the old release until this is corrected.
-    exit /b 1
-)
-echo GitHub latest release is v%NEXT_VERSION%.
-exit /b 0
-
-:detect_github
-for /f "usebackq delims=" %%A in (`powershell -NoProfile -File "tools\get_github.ps1"`) do set "%%A"
+:detect_forgejo
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -File "tools\get_forgejo.ps1"`) do set "%%A"
 exit /b 0
 
 :usage

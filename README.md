@@ -22,7 +22,7 @@ A vibe-coded, keyboard-first, screen-reader-friendly torrent manager for Windows
 
 ## Download and install
 
-Grab the latest build from the [Releases page](https://github.com/serrebidev/SerrebiTorrent/releases).
+Grab the latest build from the [Releases page](https://git.serrebiradio.com/serrebi/SerrebiTorrent/releases).
 
 **Windows portable**
 
@@ -63,7 +63,7 @@ Tools -> Search for Torrents... (`Ctrl+F`) searches Knaben, The Pirate Bay, EZTV
 
 **Search sites...** switches individual indexers off, and indexers added in a later release are searched by default. **My indexers...** adds your own Torznab or Newznab endpoint — a whole Prowlarr or Jackett instance counts as one. That is how private trackers are searched: those tools already hold the login and the passkey, so SerrebiTorrent never stores a tracker password. A private tracker's authenticated `.torrent` is fetched with your own credentials at the moment you add it, rather than being turned into a magnet that its swarm would refuse.
 
-SerrebiTorrent ships with no indexers of its own configured — only the public ones above. If [blindDL](https://github.com/serrebidev/blindDL) is installed on the same computer and has indexers set up, the search picks them up the first time it opens, since both use the same feed format. It only ever adds: an indexer you have edited here is never overwritten.
+SerrebiTorrent ships with no indexers of its own configured — only the public ones above. If [blindDL](https://git.serrebiradio.com/serrebi/blindDL) is installed on the same computer and has indexers set up, the search picks them up the first time it opens, since both use the same feed format. It only ever adds: an indexer you have edited here is never overwritten.
 
 ## Settings
 
@@ -124,7 +124,7 @@ correctly rather than being based on lifetime downloaded traffic.
 ## Run from source (developers)
 
 1. Install Python 3.14.
-2. `git clone https://github.com/serrebidev/SerrebiTorrent`
+2. `git clone https://git.serrebiradio.com/serrebi/SerrebiTorrent`
 3. `python -m pip install -r requirements.txt`
 4. Ensure the Python 3.14 Windows `libtorrent` extension and its DLLs are installed or available on `PATH` — it isn't published on PyPI.
 5. Launch it: `python main.py`
@@ -245,4 +245,4 @@ Pull requests are welcome. If SerrebiTorrent has been useful to you, open a PR w
 
 ## Community and support
 
-Report bugs and request features in [Issues](https://github.com/serrebidev/SerrebiTorrent/issues). For questions, feedback, and release news, join the [SerrebiProjects Telegram group](https://t.me/SerrebiProjects).
+Report bugs and request features in [Issues](https://git.serrebiradio.com/serrebi/SerrebiTorrent/issues). For questions, feedback, and release news, join the [SerrebiProjects Telegram group](https://t.me/SerrebiProjects).

@@ -1,5 +1,5 @@
 param(
-    [string]$HostName = "root@serrebiradio.com",
+    [string]$HostName = "wsl-build",
     [string]$Ref = "HEAD",
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^\d+\.\d+\.\d+$')]
@@ -39,12 +39,36 @@ try {
     # "set -Eeuo pipefail" into a bare "set" that dumps the remote environment
     # and silently drops the error handling. A login shell is not used, so the
     # remote profile cannot print secrets into the build log.
+    # The build runs in a debian:trixie container (glibc 2.41), not on the
+    # builder itself: the default builder is local WSL Ubuntu 26.04 (glibc
+    # 2.43), whose binaries would not start on older distros. Host caches keep
+    # apt .debs, uv (incl. the source-built wxPython wheel) and the libtorrent
+    # wheels between builds. $remoteRoot is validated above, so it needs no
+    # quoting inside the single-quoted container script.
+    $container = (
+        "rm -f /etc/apt/apt.conf.d/docker-clean; " +
+        "apt-get update -qq; " +
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends " +
+        "curl ca-certificates pkg-config build-essential binutils libgtk-3-dev libtiff-dev libwebp-dev " +
+        "libayatana-appindicator3-1 gir1.2-ayatanaappindicator3-0.1 " +
+        # Runtime libraries the wxPython/libtorrent .so files link against (ldd).
+        "libegl1 libgl1 libsdl2-2.0-0 libsm6 libxtst6 libxxf86vm1 libcurl4t64 libgstreamer1.0-0 " +
+        "libgstreamer-plugins-bad1.0-0 libjavascriptcoregtk-4.1-0 libnotify4 libpcre2-32-0 " +
+        "libwebkit2gtk-4.1-0 libwebpdemux2 >/dev/null; " +
+        "curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null; " +
+        "bash $remoteRoot/source/tools/build_linux.sh"
+    )
     $remoteCommand = (
         "set -Eeuo pipefail; " +
         "mkdir -p '$remoteRoot/source'; " +
         "unzip -q '$remoteRoot/source.zip' -d '$remoteRoot/source'; " +
-        "SERREBITORRENT_BUILD_VERSION='$Version' " +
-        "bash '$remoteRoot/source/tools/build_linux.sh'"
+        "docker run --rm --cpu-shares 26214 " +
+        "-v '${remoteRoot}:${remoteRoot}' " +
+        "-v /root/libtorrent-build/wheels:/root/libtorrent-build/wheels:ro " +
+        "-v /var/cache/release-build/serrebitorrent-apt:/var/cache/apt/archives " +
+        "-v /var/cache/release-build/uv:/root/.cache/uv " +
+        "-e SERREBITORRENT_BUILD_VERSION='$Version' " +
+        "debian:trixie bash -c '$container'"
     )
     Invoke-Native { ssh -o BatchMode=yes $HostName $remoteCommand } "Remote Linux build"
 

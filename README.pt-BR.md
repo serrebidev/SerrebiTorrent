@@ -84,7 +84,7 @@ Se o torrent já existir, o SerrebiTorrent compara os trackers do novo magnet co
 
 ## Compilação
 
-`build_exe.bat` coordena os releases a partir da máquina Windows usada para publicação. Ele cria um ambiente limpo de compilação, instala o wheel mais recente de libtorrent para CPython 3.14 mantido localmente, empacota e verifica o Windows localmente e solicita a `root@serrebiradio.com` que compile e verifique o Linux. Pacotes de macOS associados a tags são compilados nativamente em um runner de macOS.
+`build_exe.bat` coordena os releases a partir da máquina Windows usada para publicação. Ele cria um ambiente limpo de compilação, instala o wheel mais recente de libtorrent para CPython 3.14 mantido localmente, empacota e verifica o Windows localmente e solicita a `wsl-build` (WSL local, contêiner debian:trixie) que compile e verifique o Linux. Pacotes de macOS associados a tags são compilados nativamente em um runner de macOS.
 
 Pré-requisitos:
 - Python 3.14

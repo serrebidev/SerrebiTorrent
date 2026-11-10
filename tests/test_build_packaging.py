@@ -51,11 +51,12 @@ def test_native_build_policy_uses_local_windows_ssh_linux_and_actions_macos():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "%LOCALAPPDATA%\\Programs\\Python\\Launcher\\py.exe" in batch
-    assert "root@serrebiradio.com" in remote
+    assert "wsl-build" in remote
+    assert "debian:trixie" in remote
     assert "runs-on: macos-15" in workflow
     assert "windows-latest" not in workflow
     assert "ubuntu-latest" not in workflow
-    assert "actions/upload-artifact@v7" in workflow
+    assert "forgejo/upload-artifact@v4" in workflow
     assert "git.serrebiradio.com" in workflow
     assert "FORGEJO_TOKEN" in workflow
     assert "gh release upload" not in workflow

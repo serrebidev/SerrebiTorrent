@@ -177,7 +177,7 @@ if /I "%MODE%"=="release" (
         copy /Y "!SERREBITORRENT_LINUX_TARBALL!" "dist\%APP_NAME%-v!NEXT_VERSION!-linux-x86_64.tar.gz" >nul
         if errorlevel 1 goto :error
     ) else (
-        echo Building Linux release on root@serrebiradio.com...
+        echo Building Linux release on wsl-build [local WSL]...
         powershell -NoProfile -File "tools\build_linux_remote.ps1" -Ref HEAD -Version "!NEXT_VERSION!" -OutputDirectory "dist"
         if errorlevel 1 goto :error
     )

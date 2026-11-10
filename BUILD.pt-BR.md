@@ -2,7 +2,7 @@
 
 [English](BUILD.md) | **Português (Brasil)**
 
-Os pacotes de cada plataforma devem ser compilados no respectivo sistema operacional nativo. O Windows é compilado localmente nesta máquina, o Linux é compilado por SSH em `root@serrebiradio.com` e o macOS é compilado pelo GitHub Actions.
+Os pacotes de cada plataforma devem ser compilados no respectivo sistema operacional nativo. O Windows é compilado localmente nesta máquina, o Linux é compilado por SSH em `wsl-build` (WSL local, contêiner debian:trixie) e o macOS é compilado pelo GitHub Actions.
 
 ## Comandos
 

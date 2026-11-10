@@ -134,7 +134,7 @@ correctly rather than being based on lifetime downloaded traffic.
 `build_exe.bat` drives releases from the Windows release machine. It creates a
 clean build environment, installs the newest locally maintained CPython 3.14
 libtorrent wheel, packages and verifies Windows locally, and asks
-`root@serrebiradio.com` to build and verify Linux. Tagged macOS packages are
+`wsl-build` (local WSL, debian:trixie container) to build and verify Linux. Tagged macOS packages are
 built natively on a macOS runner.
 
 Prereqs:

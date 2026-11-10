@@ -29,7 +29,7 @@
 ## Build commands
 - Install deps (only if new environment): `python -m pip install -r requirements.txt`.
 - Windows: run `build_exe.bat build` locally on this machine. Only the macOS `ci.yml` job below still uses a cloud runner.
-- Linux: run `powershell -File tools\\build_linux_remote.ps1 -Version X.Y.Z`; it must build through SSH on `root@serrebiradio.com`.
+- Linux: run `powershell -File tools\\build_linux_remote.ps1 -Version X.Y.Z`; it builds through SSH on `wsl-build` (local WSL Ubuntu) inside a debian:trixie container (glibc 2.41, so binaries run on older distros).
 - macOS: `.github/workflows/ci.yml` still builds natively on GitHub's macOS runner when the tag is pushed there, and attaches the zip to the Forgejo release (needs a `FORGEJO_TOKEN` repo secret on GitHub). Releases work without it.
 - The `.spec` file uses PyInstaller's import analysis rather than collecting every dependency submodule. It explicitly requires the libtorrent extension so PyInstaller follows only its referenced native dependencies.
 - Every package runs `tools/audit_bundle.py` and `tools/verify_frozen.py` before it is accepted.

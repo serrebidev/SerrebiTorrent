@@ -1457,7 +1457,11 @@ class LocalizedMainFrame(legacy.MainFrame):
         info.SetVersion(APP_VERSION)
         info.SetDescription(
             self._(
-                "A Windows desktop torrent manager designed for keyboard-first use and screen readers."
+                "A Windows desktop torrent manager designed for keyboard-first use and screen readers.\n\n"
+                "Author: serrebidev. GitHub: https://github.com/serrebidev/SerrebiTorrent. "
+                "Forgejo: https://git.serrebiradio.com/serrebi/SerrebiTorrent. "
+                "Projects: https://projects.serrebiradio.com. "
+                "Telegram: https://t.me/SerrebiProjects. Full credits: CREDITS.md."
             )
         )
         info.SetCopyright("Copyright © 2025-2026 serrebidev and contributors")

@@ -8,6 +8,8 @@ A vibe-coded, keyboard-first, screen-reader-friendly torrent manager for Windows
 
 **Questions, bugs, or release news?** Join the [SerrebiProjects Telegram group](https://t.me/SerrebiProjects), the fastest place to get help.
 
+More serrebi projects: [projects.serrebiradio.com](https://projects.serrebiradio.com)
+
 ## Features
 
 - Connects to local libtorrent, or a remote qBittorrent, Transmission, or rTorrent (SCGI/XML-RPC) client, all from one interface.
@@ -246,3 +248,7 @@ Pull requests are welcome. If SerrebiTorrent has been useful to you, open a PR w
 ## Community and support
 
 Report bugs and request features in [Issues](https://git.serrebiradio.com/serrebi/SerrebiTorrent/issues). For questions, feedback, and release news, join the [SerrebiProjects Telegram group](https://t.me/SerrebiProjects).
+
+## Credits
+
+See [CREDITS.md](CREDITS.md) for where the ideas behind this project came from, and the third-party projects it builds on.

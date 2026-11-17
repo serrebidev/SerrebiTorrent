@@ -3336,20 +3336,17 @@ class MainFrame(MagnetIntakeMixin, wx.Frame):
     
     def on_about(self, event):
         from app_version import APP_VERSION
-        info = wx.adv.AboutDialogInfo()
-        info.SetName("SerrebiTorrent")
-        info.SetVersion(APP_VERSION)
-        info.SetDescription(
+        from about_dialog import serrebi_links, show_about
+        # A real dialog, not AboutBox, so each link is a tab stop Enter opens.
+        show_about(
+            self,
+            "About SerrebiTorrent",
+            f"SerrebiTorrent {APP_VERSION}",
             "A Windows desktop torrent manager designed for keyboard-first use and screen readers.\n\n"
-            "Author: serrebidev. GitHub: https://github.com/serrebidev/SerrebiTorrent. "
-            "Forgejo: https://git.serrebiradio.com/serrebi/SerrebiTorrent. "
-            "Projects: https://projects.serrebiradio.com. "
-            "Telegram: https://t.me/SerrebiProjects. Full credits: CREDITS.md."
+            "Author: serrebidev.\n"
+            "Copyright © 2025-2026 serrebidev and contributors",
+            serrebi_links("serrebidev/SerrebiTorrent", "serrebi/SerrebiTorrent"),
         )
-        info.SetCopyright("Copyright © 2025-2026 serrebidev and contributors")
-        info.SetWebSite("https://git.serrebiradio.com/serrebi/SerrebiTorrent")
-        info.AddDeveloper("serrebidev")
-        wx.adv.AboutBox(info)
 
     def check_for_updates(self, manual=False):
         if self.update_check_in_progress or self.update_install_in_progress:

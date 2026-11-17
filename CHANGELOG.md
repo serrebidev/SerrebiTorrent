@@ -2,6 +2,11 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.35.3 - 2026-11-17
+
+- Use the tab-stop About dialog in the shipped app.
+- Leave the manifest download URL blank.
+
 ## v1.35.2 - 2026-11-17
 
 - Make the About links tab stops.

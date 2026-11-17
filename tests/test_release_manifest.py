@@ -13,7 +13,6 @@ def _manifest_inputs(tmp_path):
     return {
         "version": "1.2.3",
         "asset_name": "SerrebiTorrent-v1.2.3.zip",
-        "download_url": "https://example.test/SerrebiTorrent-v1.2.3.zip",
         "zip_path": zip_path,
         "notes_path": notes_path,
         "signtool_path": tmp_path / "signtool.exe",
@@ -46,3 +45,4 @@ def test_build_manifest_normalizes_explicit_signing_thumbprint(tmp_path):
 
     manifest = json.loads(output_path.read_text(encoding="utf-8"))
     assert manifest["signing_thumbprint"] == "AA" * 20
+    assert manifest["download_url"] == ""

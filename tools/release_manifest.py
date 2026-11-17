@@ -54,7 +54,6 @@ def build_manifest(
     *,
     version: str,
     asset_name: str,
-    download_url: str,
     zip_path: Path,
     notes_path: Path,
     signtool_path: Path,
@@ -68,7 +67,10 @@ def build_manifest(
     manifest = {
         "version": version,
         "asset_filename": asset_name,
-        "download_url": download_url,
+        # Blank on purpose: this manifest is mirrored to GitHub too, and every
+        # updater version fills it from the release it queried. A fixed host
+        # fails "download URL does not match" on the other mirror.
+        "download_url": "",
         "sha256": sha256,
         "published_at": published_at,
         "notes_summary": notes,
@@ -87,7 +89,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build SerrebiTorrent update manifest.")
     parser.add_argument("--version", required=True)
     parser.add_argument("--asset-name", required=True)
-    parser.add_argument("--download-url", required=True)
     parser.add_argument("--zip-path", required=True)
     parser.add_argument("--notes-path", required=True)
     parser.add_argument("--signtool-path", required=True)
@@ -100,7 +101,6 @@ def main() -> int:
         build_manifest(
             version=args.version,
             asset_name=args.asset_name,
-            download_url=args.download_url,
             zip_path=Path(args.zip_path),
             notes_path=Path(args.notes_path),
             signtool_path=Path(args.signtool_path),

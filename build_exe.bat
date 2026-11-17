@@ -230,13 +230,12 @@ exit /b 0
 
 :create_manifest
 set "MANIFEST_PATH=%CD%\dist\%MANIFEST_NAME%"
-set "DOWNLOAD_URL=https://%FORGEJO_HOST%/%FORGEJO_REPO%/releases/download/v%NEXT_VERSION%/%ZIP_NAME%"
 set "EXE_PATH=%CD%\dist\%APP_NAME%\%EXE_NAME%"
 set "SIGNING_THUMBPRINT_ARG="
 if defined SIGN_CERT_THUMBPRINT (
     set "SIGNING_THUMBPRINT_ARG=--signing-thumbprint \"%SIGN_CERT_THUMBPRINT%\""
 )
-%PYTHON_CMD% tools\release_manifest.py --version "%NEXT_VERSION%" --asset-name "%ZIP_NAME%" --download-url "%DOWNLOAD_URL%" --zip-path "%ZIP_PATH%" --notes-path "%RELEASE_NOTES%" --signtool-path "%SIGNTOOL_PATH%" --exe-path "%EXE_PATH%" %SIGNING_THUMBPRINT_ARG% --output "%MANIFEST_PATH%"
+%PYTHON_CMD% tools\release_manifest.py --version "%NEXT_VERSION%" --asset-name "%ZIP_NAME%" --zip-path "%ZIP_PATH%" --notes-path "%RELEASE_NOTES%" --signtool-path "%SIGNTOOL_PATH%" --exe-path "%EXE_PATH%" %SIGNING_THUMBPRINT_ARG% --output "%MANIFEST_PATH%"
 if errorlevel 1 (
     echo Failed to create update manifest.
     exit /b 1

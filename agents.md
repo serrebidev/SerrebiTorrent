@@ -55,6 +55,7 @@
 ## Update notes
 - The reported qBittorrent version is no longer a release chore: `qbittorrent_version()` in `session_manager.py` looks it up from qBittorrent's GitHub releases once a day and caches it in the state dir. `QBITTORRENT_FALLBACK_VERSION` is only used offline or when the lookup fails — bump it occasionally, but nothing breaks if you forget.
 - The updater accepts a `signing_thumbprint` value in the release manifest so self-signed Authenticode signatures can be trusted when Windows reports UnknownError.
+- The manifest ships `"download_url": ""` on purpose. The sync mirrors it to GitHub, where releases before v1.35.1 still look, and a fixed host fails "Update manifest download URL does not match the release asset." on the other mirror. Every updater version fills a blank URL from the release it queried.
 - Release manifests are generated via `tools/release_manifest.py`, which parses `signtool verify` output to capture the signing thumbprint (override with `SIGN_CERT_THUMBPRINT`).
 - Version bumps in `build_exe.bat` now call `tools/update_version.py` to update `app_version.py` safely (avoids PowerShell quoting pitfalls).
 - Update process runs completely hidden (no CMD windows) via `STARTUPINFO` with `SW_HIDE` flag.

@@ -2,6 +2,12 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.35.2 - 2026-11-17
+
+- Make the About links tab stops.
+- Build in a debian:trixie container on local WSL.
+- Note Forgejo lacks the latest/download fallback route.
+
 ## v1.35.1 - 2026-11-09
 
 - Point the updater at Forgejo releases.

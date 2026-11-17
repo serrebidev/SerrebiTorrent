@@ -1451,23 +1451,18 @@ class LocalizedMainFrame(legacy.MainFrame):
 
     def on_about(self, event):
         from app_version import APP_VERSION
+        from about_dialog import serrebi_links, show_about
 
-        info = wx.adv.AboutDialogInfo()
-        info.SetName("SerrebiTorrent")
-        info.SetVersion(APP_VERSION)
-        info.SetDescription(
-            self._(
-                "A Windows desktop torrent manager designed for keyboard-first use and screen readers.\n\n"
-                "Author: serrebidev. GitHub: https://github.com/serrebidev/SerrebiTorrent. "
-                "Forgejo: https://git.serrebiradio.com/serrebi/SerrebiTorrent. "
-                "Projects: https://projects.serrebiradio.com. "
-                "Telegram: https://t.me/SerrebiProjects. Full credits: CREDITS.md."
-            )
+        # Same dialog as legacy.MainFrame.on_about (links are tab stops),
+        # with the translated description.
+        show_about(
+            self,
+            "About SerrebiTorrent",
+            f"SerrebiTorrent {APP_VERSION}",
+            self._("A Windows desktop torrent manager designed for keyboard-first use and screen readers.")
+            + "\n\nAuthor: serrebidev.\nCopyright © 2025-2026 serrebidev and contributors",
+            serrebi_links("serrebidev/SerrebiTorrent", "serrebi/SerrebiTorrent"),
         )
-        info.SetCopyright("Copyright © 2025-2026 serrebidev and contributors")
-        info.SetWebSite("https://git.serrebiradio.com/serrebi/SerrebiTorrent")
-        info.AddDeveloper("serrebidev")
-        wx.adv.AboutBox(info)
 
     def _check_disk_space_before_add(self, client, data, save_path, priorities):
         preferences = self.config_manager.get_preferences()

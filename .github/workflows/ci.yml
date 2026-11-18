@@ -1,20 +1,14 @@
 name: CI
 
-# The macos job runs on the Forgejo Mac runner; everything the release
+# The macos job runs on a GitHub macOS runner; everything the release
 # publishes lives on Forgejo, so this workflow only needs read access
 # plus a FORGEJO_TOKEN secret for the tagged-upload step below.
 permissions:
   contents: read
 
+# Manual only: the Forgejo-to-GitHub sync disables GitHub workflows with
+# automatic triggers. cloud-release.yml starts this.
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       release_tag:

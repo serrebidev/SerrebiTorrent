@@ -53,7 +53,7 @@ def test_native_build_policy_uses_local_windows_ssh_linux_and_actions_macos():
     assert "%LOCALAPPDATA%\\Programs\\Python\\Launcher\\py.exe" in batch
     assert "wsl-build" in remote
     assert "debian:trixie" in remote
-    assert "runs-on: macos-15" in workflow
+    assert "runs-on: xcode-27" in workflow
     assert "windows-latest" not in workflow
     assert "ubuntu-latest" not in workflow
     assert "actions/upload-artifact@v4" in workflow

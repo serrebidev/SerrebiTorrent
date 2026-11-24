@@ -2,6 +2,10 @@
 
 All notable changes to SerrebiTorrent are recorded here.
 
+## v1.36.0 - 2026-11-24
+
+- Report an issue on GitHub from the Help menu.
+
 ## v1.35.3 - 2026-11-17
 
 - Use the tab-stop About dialog in the shipped app.

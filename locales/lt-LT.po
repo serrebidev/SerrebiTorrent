@@ -1897,3 +1897,18 @@ msgstr "Stebimas aplankas: pridėta torrentų: {count}"
 
 msgid "Failed to save RSS rule."
 msgstr "Nepavyko išsaugoti RSS taisyklės."
+
+msgid "Report an &issue on GitHub..."
+msgstr "Pranešti apie &problemą GitHub..."
+
+msgid "Describe a problem or an idea, then send it as a GitHub issue"
+msgstr "Aprašykite problemą ar idėją ir išsiųskite ją kaip GitHub pranešimą"
+
+msgid "Report an issue"
+msgstr "Pranešti apie problemą"
+
+msgid "Issue title: one line saying what went wrong or what you would like"
+msgstr "Pavadinimas: viena eilutė apie tai, kas nepavyko arba ko norėtumėte"
+
+msgid "Describe what you did, what happened, and what you expected.\nYour browser then opens GitHub with this filled in. Sign in and press Create."
+msgstr "Aprašykite, ką darėte, kas nutiko ir ko tikėjotės.\nTada naršyklė atvers GitHub su užpildytais laukais. Prisijunkite ir paspauskite „Create“."

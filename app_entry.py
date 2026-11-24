@@ -578,6 +578,11 @@ class LocalizedMainFrame(legacy.MainFrame):
         menubar.Append(tools_menu, _("&Tools"))
 
         help_menu = wx.Menu()
+        report_item = help_menu.Append(
+            wx.ID_ANY,
+            _("Report an &issue on GitHub..."),
+            _("Describe a problem or an idea, then send it as a GitHub issue"),
+        )
         about_item = help_menu.Append(
             wx.ID_ABOUT, _("&About SerrebiTorrent"), _("About this application")
         )
@@ -629,6 +634,7 @@ class LocalizedMainFrame(legacy.MainFrame):
         self.Bind(wx.EVT_MENU, self.on_remote_preferences, self.qbit_remote_prefs_item)
         self.Bind(wx.EVT_MENU, self.on_remote_preferences, self.trans_remote_prefs_item)
         self.Bind(wx.EVT_MENU, self.on_remote_preferences, self.rtorrent_remote_prefs_item)
+        self.Bind(wx.EVT_MENU, self.on_report_issue, report_item)
         self.Bind(wx.EVT_MENU, self.on_about, about_item)
 
         self._update_remote_prefs_menu_state()
@@ -1448,6 +1454,12 @@ class LocalizedMainFrame(legacy.MainFrame):
             wx.OK | wx.ICON_INFORMATION,
             self,
         )
+
+    def on_report_issue(self, event):
+        from app_version import APP_VERSION
+        from about_dialog import report_issue
+
+        report_issue(self, "serrebidev/SerrebiTorrent", f"SerrebiTorrent {APP_VERSION}", self._)
 
     def on_about(self, event):
         from app_version import APP_VERSION

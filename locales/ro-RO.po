@@ -1897,3 +1897,18 @@ msgstr "Dosar urmărit: {count} torent(e) adăugat(e)"
 
 msgid "Failed to save RSS rule."
 msgstr "Regula RSS nu a putut fi salvată."
+
+msgid "Report an &issue on GitHub..."
+msgstr "Raportează o &problemă pe GitHub..."
+
+msgid "Describe a problem or an idea, then send it as a GitHub issue"
+msgstr "Descrie o problemă sau o idee, apoi trimite-o ca tichet GitHub"
+
+msgid "Report an issue"
+msgstr "Raportează o problemă"
+
+msgid "Issue title: one line saying what went wrong or what you would like"
+msgstr "Titlu: un rând care spune ce nu a mers sau ce ți-ai dori"
+
+msgid "Describe what you did, what happened, and what you expected.\nYour browser then opens GitHub with this filled in. Sign in and press Create."
+msgstr "Descrie ce ai făcut, ce s-a întâmplat și ce te așteptai.\nApoi browserul deschide GitHub cu acestea completate. Autentifică-te și apasă „Create”."

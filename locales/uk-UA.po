@@ -1897,3 +1897,18 @@ msgstr "Тека для стеження: додано торентів: {count}
 
 msgid "Failed to save RSS rule."
 msgstr "Не вдалося зберегти правило RSS."
+
+msgid "Report an &issue on GitHub..."
+msgstr "Повідомити про &проблему на GitHub..."
+
+msgid "Describe a problem or an idea, then send it as a GitHub issue"
+msgstr "Опишіть проблему чи ідею й надішліть її як завдання на GitHub"
+
+msgid "Report an issue"
+msgstr "Повідомити про проблему"
+
+msgid "Issue title: one line saying what went wrong or what you would like"
+msgstr "Заголовок: один рядок про те, що пішло не так або чого ви хотіли б"
+
+msgid "Describe what you did, what happened, and what you expected.\nYour browser then opens GitHub with this filled in. Sign in and press Create."
+msgstr "Опишіть, що ви робили, що сталося і чого ви очікували.\nПотім браузер відкриє GitHub із заповненими полями. Увійдіть і натисніть «Create»."

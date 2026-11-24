@@ -1897,3 +1897,18 @@ msgstr "Jälgitav kaust: lisatud {count} torrentit"
 
 msgid "Failed to save RSS rule."
 msgstr "RSS-reeglit ei õnnestunud salvestada."
+
+msgid "Report an &issue on GitHub..."
+msgstr "Teata &probleemist GitHubis..."
+
+msgid "Describe a problem or an idea, then send it as a GitHub issue"
+msgstr "Kirjelda probleemi või ideed ja saada see GitHubi teatena"
+
+msgid "Report an issue"
+msgstr "Teata probleemist"
+
+msgid "Issue title: one line saying what went wrong or what you would like"
+msgstr "Pealkiri: üks rida, mis ütleb, mis läks valesti või mida soovite"
+
+msgid "Describe what you did, what happened, and what you expected.\nYour browser then opens GitHub with this filled in. Sign in and press Create."
+msgstr "Kirjeldage, mida tegite, mis juhtus ja mida ootasite.\nSeejärel avab brauser GitHubi, kus see on juba täidetud. Logige sisse ja vajutage „Create“."

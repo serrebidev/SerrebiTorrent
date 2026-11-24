@@ -1897,3 +1897,18 @@ msgstr "Figyelt mappa: {count} torrent hozzáadva"
 
 msgid "Failed to save RSS rule."
 msgstr "Nem sikerült menteni az RSS-szabályt."
+
+msgid "Report an &issue on GitHub..."
+msgstr "&Probléma bejelentése a GitHubon..."
+
+msgid "Describe a problem or an idea, then send it as a GitHub issue"
+msgstr "Írjon le egy problémát vagy ötletet, majd küldje el GitHub-hibajegyként"
+
+msgid "Report an issue"
+msgstr "Probléma bejelentése"
+
+msgid "Issue title: one line saying what went wrong or what you would like"
+msgstr "Cím: egy sor arról, mi romlott el, vagy mit szeretne"
+
+msgid "Describe what you did, what happened, and what you expected.\nYour browser then opens GitHub with this filled in. Sign in and press Create."
+msgstr "Írja le, mit csinált, mi történt, és mire számított.\nEzután a böngésző megnyitja a GitHubot kitöltve. Jelentkezzen be, és nyomja meg a „Create” gombot."

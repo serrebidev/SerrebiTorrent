@@ -613,6 +613,12 @@ msgstr ""
 msgid "Delete this profile?"
 msgstr ""
 
+msgid "Describe a problem or an idea, then send it as a GitHub issue"
+msgstr ""
+
+msgid "Describe what you did, what happened, and what you expected.\nYour browser then opens GitHub with this filled in. Sign in and press Create."
+msgstr ""
+
 msgid "Deselect All"
 msgstr ""
 
@@ -1121,6 +1127,9 @@ msgid "Invalid number for {label}: {error}"
 msgstr ""
 
 msgid "Invalid torrent URL."
+msgstr ""
+
+msgid "Issue title: one line saying what went wrong or what you would like"
 msgstr ""
 
 msgid "Language"
@@ -1778,6 +1787,12 @@ msgid "Rename or remove torrent categories in the connected profile"
 msgstr ""
 
 msgid "Renamed category \"{old}\" to \"{new}\" for {count} torrent(s)."
+msgstr ""
+
+msgid "Report an &issue on GitHub..."
+msgstr ""
+
+msgid "Report an issue"
 msgstr ""
 
 msgid "Reset failed: {error}"
